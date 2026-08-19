@@ -1,0 +1,63 @@
+{
+  "esp": {
+    "colorExits": [
+      0.20000000298023224,
+      0.8500000238418579,
+      0.44999998807907104,
+      1.0
+    ],
+    "colorFireExits": [
+      0.949999988079071,
+      0.550000011920929,
+      0.15000000596046448,
+      1.0
+    ],
+    "colorItems": [
+      1.0,
+      0.7200000286102295,
+      0.25,
+      1.0
+    ],
+    "colorMonsters": [
+      0.8799999952316284,
+      0.07999999821186066,
+      0.17000000178813934,
+      1.0
+    ],
+    "colorPlayers": [
+      0.3499999940395355,
+      0.8500000238418579,
+      1.0,
+      1.0
+    ],
+    "colorShips": [
+      0.3499999940395355,
+      0.6499999761581421,
+      1.0,
+      1.0
+    ],
+    "deathNotifications": true,
+    "distance": true,
+    "exits": true,
+    "fireExits": true,
+    "items": true,
+    "lines": true,
+    "maxDistance": 1000.0,
+    "monsters": true,
+    "names": true,
+    "outlines": true,
+    "players": true,
+    "ships": true,
+    "useScrapTiers": true,
+    "values": true
+  },
+  "extendedInventory": false,
+  "fontPath": "",
+  "infiniteBattery": false,
+  "infiniteStamina": true,
+  "logPath": "",
+  "menuKey": 70,
+  "noWeight": true,
+  "pollRate": 30.0,
+  "tickIntervalMs": 100
+}
