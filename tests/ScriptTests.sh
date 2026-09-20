@@ -1171,6 +1171,27 @@ expect_contains '-DKUE_BUILD_MODULE=ON' "$test_directory/cmake.log" \
 expect_contains '--target kuelethal' "$test_directory/cmake.log" \
     "build requests the production module target directly"
 
+run_command env PATH="$test_directory/bin:$PATH" \
+    SCRIPT_TEST_MODULE="$test_directory/kuelethal.so" \
+    SCRIPT_CMAKE_LOG="$test_directory/cmake-windows.log" \
+    BUILD_DIR="$test_directory/build windows" TARGET=windows \
+    "$project_root/scripts/build.sh" \
+    >"$test_directory/stdout" 2>"$test_directory/stderr"
+expect_failure "$command_status" \
+    "build for Windows fails visibly without the Windows artifacts"
+expect_contains '-DCMAKE_TOOLCHAIN_FILE=' "$test_directory/cmake-windows.log" \
+    "build for Windows configures the MinGW toolchain"
+expect_contains '--target kuelethal kue-inject' \
+    "$test_directory/cmake-windows.log" \
+    "build for Windows requests the module and injector targets"
+expect_contains 'build did not produce a nonempty artifact' \
+    "$test_directory/stderr" \
+    "build for Windows identifies the missing artifact"
+
+run_command env TARGET=macos "$project_root/scripts/build.sh" \
+    >"$test_directory/stdout" 2>"$test_directory/stderr"
+expect_failure "$command_status" "build rejects an unsupported TARGET"
+
 for jobs in '' 0 invalid 1025; do
     run_command env PATH="$test_directory/bin:$PATH" \
         SCRIPT_TEST_MODULE="$test_directory/kuelethal.so" \

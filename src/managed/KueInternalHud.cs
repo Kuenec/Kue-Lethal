@@ -8,6 +8,7 @@ using Unity.Netcode;
 using UnityEngine;
 using UnityEngine.AI;
 using UnityEngine.InputSystem;
+using UnityEngine.Rendering;
 using UnityEngine.UI;
 
 namespace Kue.Internal
@@ -167,9 +168,19 @@ namespace Kue.Internal
 
     public sealed class KueHud : MonoBehaviour
     {
+        private enum MarkKind
+        {
+            Static,
+            Player,
+            Enemy,
+            Item,
+        }
+
         private sealed class Mark
         {
             public string name;
+            public MarkKind kind;
+            public Component owner;
             public Transform marker;
             public Renderer[] renderers;
             public Renderer[] playerRenderers;
@@ -328,6 +339,19 @@ namespace Kue.Internal
         private PlayerControllerB flyPlayer;
         private CharacterController flyController;
         private float flySpeed = 15f;
+        private const float FlapCycleSpeed = 7f;
+        private const float FlapAmplitudeDegrees = 40f;
+        private readonly List<Transform> flapBones = new List<Transform>();
+        private readonly List<float> flapBoneSides = new List<float>();
+        private PlayerControllerB flapPlayer;
+        private bool thirdPersonEnabled;
+        private PlayerControllerB thirdPersonPlayer;
+        private Camera thirdPersonCamera;
+        private Vector3 thirdPersonRestorePosition;
+        private bool thirdPersonCameraMoved;
+        private const float ThirdPersonDistance = 2.6f;
+        private const float ThirdPersonHeight = 0.35f;
+        private const float ThirdPersonSide = 0.45f;
         private bool shipHornEnabled;
         private bool carHornEnabled;
         private bool terminalSpamEnabled;
@@ -397,8 +421,17 @@ namespace Kue.Internal
             Debug.Log("[Kue] Frame pacing set to uncapped (vSync=0, targetFrameRate=-1)");
         }
 
+        private void OnEnable()
+        {
+            RenderPipelineManager.beginCameraRendering += OnBeginCameraRendering;
+            RenderPipelineManager.endCameraRendering += OnEndCameraRendering;
+        }
+
         private void OnDisable()
         {
+            RenderPipelineManager.beginCameraRendering -= OnBeginCameraRendering;
+            RenderPipelineManager.endCameraRendering -= OnEndCameraRendering;
+            SetThirdPerson(false);
             ReleaseActiveInputState();
         }
 
@@ -493,6 +526,8 @@ namespace Kue.Internal
         {
             ApplyLocalPlayerFeatures();
             UpdatePersistentLure();
+            UpdateFlappingArms();
+            UpdateThirdPersonModel();
         }
 
         private void ApplyLocalPlayerFeatures()
@@ -1706,6 +1741,242 @@ namespace Kue.Internal
             local.takingFallDamage = false;
         }
 
+        private void ForceTentacleAttackManaged()
+        {
+            DepositItemsDesk desk = FindOne("DepositItemsDesk") as DepositItemsDesk;
+            if (desk == null)
+            {
+                ReportActionFailure("Tentacle attack failed: the company desk is not loaded");
+                return;
+            }
+            if (desk.currentMood == null || desk.currentMood.enableMonsterAnimationIndex == null)
+            {
+                ReportActionFailure("Tentacle attack failed: the company's mood has no monster");
+                return;
+            }
+            if (desk.attacking || desk.inGrabbingObjectsAnimation)
+            {
+                ReportActionFailure("Tentacle attack skipped: the company desk is busy");
+                return;
+            }
+            PlayerControllerB local = LocalPlayer();
+            if (local != null && local.IsHost)
+            {
+                desk.AttackPlayersClientRpc();
+                StartCoroutine(SettleDeskAfterAttack(desk));
+            }
+            else
+                desk.AttackPlayersServerRpc();
+        }
+
+        private IEnumerator SettleDeskAfterAttack(DepositItemsDesk desk)
+        {
+            float deadline = Time.unscaledTime + 12f;
+            yield return new WaitForSeconds(0.5f);
+            while (desk != null && desk.attacking && Time.unscaledTime < deadline)
+                yield return null;
+            yield return new WaitForSeconds(2f);
+            if (desk == null || desk.attacking)
+                yield break;
+            desk.timeSinceAttacking = 0f;
+            if (desk.doorOpen && desk.itemsOnCounter.Count == 0)
+                desk.OpenShutDoorClientRpc(false);
+        }
+
+        private void DepositShipScrapManaged()
+        {
+            DepositItemsDesk desk = FindOne("DepositItemsDesk") as DepositItemsDesk;
+            PlayerControllerB local = LocalPlayer();
+            if (desk == null || desk.deskObjectsContainer == null || desk.triggerCollider == null ||
+                local == null)
+            {
+                ReportActionFailure("Deposit failed: the company desk is not loaded");
+                return;
+            }
+            Transform container = desk.deskObjectsContainer.transform;
+            Bounds counter = desk.triggerCollider.bounds;
+            int moved = 0;
+            int denied = 0;
+            foreach (GrabbableObject item in UnityEngine.Object
+                         .FindObjectsOfType<GrabbableObject>())
+            {
+                if (item == null || item.itemProperties == null || !item.itemProperties.isScrap ||
+                    item.isHeld || item.isPocketed || item.heldByPlayerOnServer ||
+                    item.deactivated || (!item.isInShipRoom && !item.isInElevator) ||
+                    item.transform.IsChildOf(container))
+                    continue;
+                NetworkObject networkObject = item.GetComponent<NetworkObject>();
+                if (networkObject == null)
+                    continue;
+                if (!TakeOwnership(item))
+                {
+                    denied++;
+                    continue;
+                }
+                Vector3 point = RoundManager.RandomPointInBounds(counter);
+                point.y = counter.min.y + item.itemProperties.verticalOffset;
+                Vector3 offset = container.InverseTransformPoint(point);
+                local.PlaceGrabbableObject(container, offset, false, item);
+                item.isInShipRoom = false;
+                item.isInElevator = false;
+                desk.AddObjectToDeskServerRpc(networkObject);
+                moved++;
+            }
+            Debug.Log("[Kue] Deposited " + moved + " scrap items on the company desk");
+            if (moved == 0 && denied == 0)
+                ReportActionFailure("Deposit found no scrap in the ship");
+            else if (denied > 0)
+                ReportActionFailure("Deposit moved " + moved + "; ownership denied for " + denied);
+        }
+
+        private void AddTerminalCreditsManaged(int amount)
+        {
+            Terminal terminal = FindOne("Terminal") as Terminal;
+            PlayerControllerB local = LocalPlayer();
+            if (terminal == null || local == null || amount <= 0)
+            {
+                ReportActionFailure("Credits failed: the terminal is not loaded");
+                return;
+            }
+            int credits = Mathf.Clamp(terminal.groupCredits + amount, 0, 10000000);
+            if (!local.IsHost)
+            {
+                ReportActionFailure("Credits failed: only the host owns the terminal balance");
+                return;
+            }
+            terminal.groupCredits = credits;
+            terminal.SyncGroupCreditsClientRpc(credits, terminal.numberOfItemsInDropship);
+            Debug.Log("[Kue] Terminal credits set to " + credits);
+        }
+
+        private void SetThirdPerson(bool enabled)
+        {
+            PlayerControllerB local = LocalPlayer();
+            if (thirdPersonPlayer != null && (!enabled || thirdPersonPlayer != local))
+            {
+                if (!thirdPersonPlayer.isPlayerDead && thirdPersonPlayer.thisPlayerModel != null)
+                    thirdPersonPlayer.thisPlayerModel.shadowCastingMode =
+                        ShadowCastingMode.ShadowsOnly;
+                if (!thirdPersonPlayer.isPlayerDead && thirdPersonPlayer.thisPlayerModelArms != null)
+                    thirdPersonPlayer.thisPlayerModelArms.enabled = true;
+                thirdPersonPlayer = null;
+            }
+            thirdPersonEnabled = enabled && local != null;
+            if (thirdPersonEnabled)
+                thirdPersonPlayer = local;
+        }
+
+        private void UpdateThirdPersonModel()
+        {
+            if (!thirdPersonEnabled)
+                return;
+            PlayerControllerB local = LocalPlayer();
+            if (local == null || local.isPlayerDead || local != thirdPersonPlayer)
+            {
+                SetThirdPerson(false);
+                return;
+            }
+            if (local.thisPlayerModel != null &&
+                local.thisPlayerModel.shadowCastingMode != ShadowCastingMode.On)
+                local.thisPlayerModel.shadowCastingMode = ShadowCastingMode.On;
+            if (local.thisPlayerModelArms != null && local.thisPlayerModelArms.enabled)
+                local.thisPlayerModelArms.enabled = false;
+        }
+
+        private void OnBeginCameraRendering(ScriptableRenderContext context, Camera camera)
+        {
+            thirdPersonCameraMoved = false;
+            if (!thirdPersonEnabled || thirdPersonPlayer == null || camera == null ||
+                camera != thirdPersonPlayer.gameplayCamera)
+                return;
+            Transform view = camera.transform;
+            Vector3 eye = view.position;
+            Vector3 desired = eye - view.forward * ThirdPersonDistance +
+                              view.up * ThirdPersonHeight + view.right * ThirdPersonSide;
+            RaycastHit hit;
+            int mask = StartOfRound.Instance != null
+                           ? StartOfRound.Instance.collidersAndRoomMaskAndDefault
+                           : Physics.DefaultRaycastLayers;
+            if (Physics.Linecast(eye, desired, out hit, mask, QueryTriggerInteraction.Ignore))
+                desired = hit.point + (eye - desired).normalized * 0.15f;
+            thirdPersonCamera = camera;
+            thirdPersonRestorePosition = eye;
+            thirdPersonCameraMoved = true;
+            view.position = desired;
+        }
+
+        private void OnEndCameraRendering(ScriptableRenderContext context, Camera camera)
+        {
+            if (!thirdPersonCameraMoved || camera != thirdPersonCamera)
+                return;
+            thirdPersonCameraMoved = false;
+            camera.transform.position = thirdPersonRestorePosition;
+        }
+
+        private static bool IsUpperArmBone(Transform bone)
+        {
+            string name = bone.name.ToLowerInvariant();
+            if (!name.Contains("arm") || name.Contains("fore") || name.Contains("lower") ||
+                name.Contains("hand") || name.Contains("finger") || name.Contains("metarig"))
+                return false;
+            return true;
+        }
+
+        private static float BoneSide(Transform bone)
+        {
+            string name = bone.name.ToLowerInvariant();
+            return name.EndsWith(".r") || name.Contains(".r_") || name.Contains("right") ? -1f
+                                                                                         : 1f;
+        }
+
+        private void CollectFlapBones(PlayerControllerB player)
+        {
+            flapBones.Clear();
+            flapBoneSides.Clear();
+            flapPlayer = player;
+            Transform[] roots = { player.playerModelArmsMetarig,
+                                  player.thisPlayerModel != null ? player.thisPlayerModel.rootBone
+                                                                 : null };
+            foreach (Transform root in roots)
+            {
+                if (root == null)
+                    continue;
+                foreach (Transform bone in root.GetComponentsInChildren<Transform>(true))
+                {
+                    if (bone == root || !IsUpperArmBone(bone))
+                        continue;
+                    bool nested = false;
+                    foreach (Transform chosen in flapBones)
+                        if (bone.IsChildOf(chosen))
+                            nested = true;
+                    if (nested)
+                        continue;
+                    flapBones.Add(bone);
+                    flapBoneSides.Add(BoneSide(bone));
+                }
+            }
+        }
+
+        private void UpdateFlappingArms()
+        {
+            if (!flyEnabled || flyPlayer == null)
+            {
+                flapPlayer = null;
+                return;
+            }
+            if (flapPlayer != flyPlayer)
+                CollectFlapBones(flyPlayer);
+            float flap = (Mathf.Sin(Time.unscaledTime * FlapCycleSpeed) * 0.5f + 0.5f) *
+                         FlapAmplitudeDegrees;
+            for (int i = 0; i < flapBones.Count; i++)
+            {
+                Transform bone = flapBones[i];
+                if (bone == null)
+                    continue;
+                bone.localRotation *= Quaternion.AngleAxis(flap * flapBoneSides[i], Vector3.forward);
+            }
+        }
+
         private static UnityEngine.Object[] FindAll(string typeName)
         {
             ObjectCacheEntry cached;
@@ -2086,10 +2357,13 @@ namespace Kue.Internal
             else if (action == 20)
                 openShipDoorSpace = !openShipDoorSpace;
             else if (action == 21)
-            {
-                UnityEngine.Object desk = FindOne("DepositItemsDesk");
-                InvokeAny(desk, "AttackPlayersServerRpc");
-            }
+                ForceTentacleAttackManaged();
+            else if (action == 45)
+                DepositShipScrapManaged();
+            else if (action == 46)
+                AddTerminalCreditsManaged(payload);
+            else if (action == 47)
+                SetThirdPerson(!thirdPersonEnabled);
             else if (action == 22)
                 SpawnMaskedManaged();
             else if (action == 23)
@@ -2407,7 +2681,7 @@ namespace Kue.Internal
 
         private void Add(string text, Transform marker, Component rendererRoot, Color color,
                          bool enabled, int value = -1, bool portal = false,
-                         float rendererRadius = 12f)
+                         float rendererRadius = 12f, MarkKind kind = MarkKind.Static)
         {
             if (marker == null || rendererRoot == null)
                 return;
@@ -2415,6 +2689,8 @@ namespace Kue.Internal
             if (mark.playerRenderers != null)
                 Array.Clear(mark.playerRenderers, 0, mark.playerRenderers.Length);
             mark.name = text;
+            mark.kind = kind;
+            mark.owner = rendererRoot;
             mark.marker = marker;
             mark.renderers = CachedRenderers(rendererRoot);
             mark.color = color;
@@ -2436,7 +2712,10 @@ namespace Kue.Internal
             mark.playerRenderers[2] = player.thisPlayerModelLOD2;
             mark.renderers = mark.playerRenderers;
             mark.name = player.playerUsername;
-            mark.marker = player.transform;
+            mark.kind = MarkKind.Player;
+            mark.owner = player;
+            mark.marker = player.playerGlobalHead != null ? player.playerGlobalHead
+                                                          : player.transform;
             mark.color = color;
             mark.value = -1;
             mark.enabled = enabled;
@@ -2504,7 +2783,8 @@ namespace Kue.Internal
                 if (enemy != null && !enemy.isEnemyDead)
                 {
                     Add(enemy.enemyType != null ? enemy.enemyType.enemyName : enemy.GetType().Name,
-                        enemy.transform, enemy, outlineColors[2], Flag(2), -1, false, 12f);
+                        enemy.transform, enemy, outlineColors[2], Flag(2), -1, false, 12f,
+                        MarkKind.Enemy);
                     if (enemy.enemyType != null)
                     {
                         int catalogIndex;
@@ -2564,7 +2844,8 @@ namespace Kue.Internal
                 if (item != null && item.itemProperties != null && item.itemProperties.isScrap &&
                     !item.isHeld && !item.isPocketed && !item.deactivated)
                     Add(item.itemProperties.itemName, item.transform, item,
-                        ItemColor(item.scrapValue), Flag(1), item.scrapValue, false, 5f);
+                        ItemColor(item.scrapValue), Flag(1), item.scrapValue, false, 5f,
+                        MarkKind.Item);
             }
 
             foreach (UnityEngine.Object loaded in FindAll("EntranceTeleport"))
@@ -2598,6 +2879,7 @@ namespace Kue.Internal
             for (int i = markCount; i < marks.Count; i++)
             {
                 marks[i].marker = null;
+                marks[i].owner = null;
                 marks[i].renderers = null;
                 if (marks[i].playerRenderers != null)
                     Array.Clear(marks[i].playerRenderers, 0, marks[i].playerRenderers.Length);
@@ -2609,6 +2891,14 @@ namespace Kue.Internal
         private Camera GameCamera()
         {
             PlayerControllerB local = LocalPlayer();
+            StartOfRound round = StartOfRound.Instance;
+            if (local != null && local.isPlayerDead && round != null &&
+                round.spectateCamera != null && round.spectateCamera.enabled &&
+                round.spectateCamera.gameObject.activeInHierarchy)
+            {
+                activeCamera = round.spectateCamera;
+                return activeCamera;
+            }
             if (local != null && local.gameplayCamera != null && local.gameplayCamera.enabled)
             {
                 activeCamera = local.gameplayCamera;
@@ -2692,7 +2982,7 @@ namespace Kue.Internal
             for (int markIndex = 0; markIndex < markCount; markIndex++)
             {
                 Mark mark = marks[markIndex];
-                if (!mark.enabled || mark.marker == null)
+                if (!mark.enabled || mark.marker == null || !MarkStillVisible(mark))
                     continue;
                 Vector3 world = mark.marker.position;
                 float distanceSquared = (origin - world).sqrMagnitude;
@@ -2745,6 +3035,25 @@ namespace Kue.Internal
                 GUI.color = drawColor;
                 GUI.Label(rect, text, label);
                 GUI.color = previousColor;
+            }
+        }
+
+        private static bool MarkStillVisible(Mark mark)
+        {
+            if (mark.owner == null)
+                return mark.kind == MarkKind.Static;
+            switch (mark.kind)
+            {
+            case MarkKind.Player:
+                PlayerControllerB player = (PlayerControllerB)mark.owner;
+                return !player.isPlayerDead && player.isPlayerControlled;
+            case MarkKind.Enemy:
+                return !((EnemyAI)mark.owner).isEnemyDead;
+            case MarkKind.Item:
+                GrabbableObject item = (GrabbableObject)mark.owner;
+                return !item.isHeld && !item.isPocketed && !item.deactivated;
+            default:
+                return true;
             }
         }
 
@@ -2808,8 +3117,9 @@ namespace Kue.Internal
                 if (limitRadius && (bounds.extents.sqrMagnitude > radiusSquared ||
                                     (bounds.center - markerPosition).sqrMagnitude > radiusSquared))
                     continue;
-                Matrix4x4 localToWorld = renderer.localToWorldMatrix;
                 SkinnedMeshRenderer skinned = renderer as SkinnedMeshRenderer;
+                Matrix4x4 localToWorld = skinned != null ? skinned.transform.localToWorldMatrix
+                                                         : renderer.localToWorldMatrix;
                 if (skinned != null)
                 {
                     if (skinned.sharedMesh == null)

@@ -10,6 +10,8 @@
 #include "overlay/InternalHudRenderer.h"
 #include "overlay/Menu.h"
 #include "overlay/Theme.h"
+#include "platform/Environment.h"
+#include "platform/FileSystem.h"
 
 #include "imgui.h"
 
@@ -20,6 +22,7 @@
 #include <cstdint>
 #include <limits>
 #include <optional>
+#include <span>
 #include <string_view>
 
 namespace kue::internalhud {
@@ -33,6 +36,60 @@ ImGuiContext* gContext = nullptr;
 std::optional<ui::Interface> gInterface;
 PlayerActionQueue gManagedActions;
 constexpr int kMaximumScreenDimension = 16384;
+constexpr std::uint64_t kMaximumFontFileBytes = std::uint64_t{64} * 1024 * 1024;
+constexpr float kBodyFontPixels = 15.f;
+constexpr float kTitleFontPixels = 22.f;
+
+ImFont* loadFontFile(ImGuiIO& io, const char* path, float pixels) {
+    const platform::DescriptorResult opened = platform::openForRead(path);
+    if (opened.descriptor < 0) {
+        KUE_WARN("internal HUD: cannot open font %s (errno=%d)", path, opened.errorCode);
+        return nullptr;
+    }
+    const platform::FileInspection inspection = platform::inspectFile(opened.descriptor);
+    if (!inspection.succeeded || inspection.kind != platform::FileKind::Regular ||
+        inspection.bytes == 0 || inspection.bytes > kMaximumFontFileBytes) {
+        KUE_WARN("internal HUD: font %s is not a regular file within %llu bytes", path,
+                 static_cast<unsigned long long>(kMaximumFontFileBytes));
+        static_cast<void>(platform::closeDescriptor(opened.descriptor));
+        return nullptr;
+    }
+    const std::size_t size = static_cast<std::size_t>(inspection.bytes);
+    void* const data = ImGui::MemAlloc(size);
+    if (!data) {
+        static_cast<void>(platform::closeDescriptor(opened.descriptor));
+        return nullptr;
+    }
+    std::size_t loaded = 0;
+    bool readFailed = false;
+    while (loaded < size) {
+        const platform::ReadResult read = platform::readSome(
+            opened.descriptor, std::span<char>(static_cast<char*>(data) + loaded, size - loaded));
+        if (read.errorCode != 0 || read.bytes == 0) {
+            readFailed = true;
+            break;
+        }
+        loaded += read.bytes;
+    }
+    static_cast<void>(platform::closeDescriptor(opened.descriptor));
+    if (readFailed) {
+        KUE_WARN("internal HUD: cannot read font %s", path);
+        ImGui::MemFree(data);
+        return nullptr;
+    }
+    ImFont* const font = io.Fonts->AddFontFromMemoryTTF(data, static_cast<int>(size), pixels);
+    if (!font)
+        ImGui::MemFree(data);
+    return font;
+}
+
+ImFont* loadSystemFont(ImGuiIO& io, platform::SystemFontRole role, float pixels) {
+    platform::EnvironmentStorage storage;
+    const platform::SystemFontPath systemFont = platform::systemFontPath(role, storage);
+    if (!systemFont.available)
+        return nullptr;
+    return loadFontFile(io, storage.data(), pixels);
+}
 RuntimeCatalogs gRuntimeCatalogs;
 InternalHudRenderer gRenderer;
 double gLastFrameTime = 0.0;
@@ -146,6 +203,8 @@ ManagedPayloadEncoding encodeManagedPayload(const PlayerActionRequest& request,
                            (static_cast<int>(payload->clientId) << 17);
         return {ManagedPayloadStatus::Encoded, output};
     }
+    if (const auto* payload = std::get_if<TerminalCreditsPayload>(&request.payload))
+        return {ManagedPayloadStatus::Encoded, payload->amount};
     const auto* payload = std::get_if<PlushieIntervalPayload>(&request.payload);
     if (!payload || payload->interval.count() > std::numeric_limits<int>::max())
         return {};
@@ -174,22 +233,13 @@ void ensureContext() {
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
 
     ImFont* body = nullptr;
-    if (!gConfig->fontPath.empty()) {
-        body = io.Fonts->AddFontFromFileTTF(gConfig->fontPath.c_str(), 15.f);
-    }
+    if (!gConfig->fontPath.empty())
+        body = loadFontFile(io, gConfig->fontPath.c_str(), kBodyFontPixels);
     if (!body)
-        body = io.Fonts->AddFontFromFileTTF("/usr/share/fonts/TTF/DejaVuSans.ttf", 15.f);
-    if (!body) {
-        body =
-            io.Fonts->AddFontFromFileTTF("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 15.f);
-    }
+        body = loadSystemFont(io, platform::SystemFontRole::Body, kBodyFontPixels);
     if (!body)
         body = io.Fonts->AddFontDefault();
-    ImFont* title = io.Fonts->AddFontFromFileTTF("/usr/share/fonts/TTF/DejaVuSans-Bold.ttf", 22.f);
-    if (!title) {
-        title = io.Fonts->AddFontFromFileTTF("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-                                             22.f);
-    }
+    ImFont* title = loadSystemFont(io, platform::SystemFontRole::Title, kTitleFontPixels);
     if (!title)
         title = body;
     io.FontDefault = body;

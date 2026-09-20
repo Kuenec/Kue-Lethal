@@ -1,5 +1,7 @@
 #include "game/PlayerSnapshot.h"
 
+#include "AlignedAllocation.h"
+
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -55,8 +57,7 @@ void* allocate(std::size_t size) {
 
 void* allocateAligned(std::size_t size, std::size_t alignment) {
     recordAllocation();
-    void* memory = nullptr;
-    if (posix_memalign(&memory, alignment, size == 0 ? 1 : size) == 0)
+    if (void* memory = kue::tests::allocateAligned(size, alignment))
         return memory;
     throw std::bad_alloc();
 }
@@ -434,19 +435,19 @@ void operator delete[](void* memory, std::size_t) noexcept {
 }
 
 void operator delete(void* memory, std::align_val_t) noexcept {
-    std::free(memory);
+    kue::tests::releaseAligned(memory);
 }
 
 void operator delete[](void* memory, std::align_val_t) noexcept {
-    std::free(memory);
+    kue::tests::releaseAligned(memory);
 }
 
 void operator delete(void* memory, std::size_t, std::align_val_t) noexcept {
-    std::free(memory);
+    kue::tests::releaseAligned(memory);
 }
 
 void operator delete[](void* memory, std::size_t, std::align_val_t) noexcept {
-    std::free(memory);
+    kue::tests::releaseAligned(memory);
 }
 
 int main(int argc, char** argv) {

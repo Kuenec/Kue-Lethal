@@ -40,7 +40,7 @@ struct ActionContract {
     std::string_view name;
 };
 
-constexpr std::array<ActionContract, 44> kActionContracts{{
+constexpr std::array<ActionContract, 47> kActionContracts{{
     {kue::PlayerAction::TeleportTo, kue::PlayerActionPayloadKind::PlayerTarget, "TeleportTo"},
     {kue::PlayerAction::Kill, kue::PlayerActionPayloadKind::PlayerTarget, "Kill"},
     {kue::PlayerAction::Heal, kue::PlayerActionPayloadKind::PlayerTarget, "Heal"},
@@ -104,15 +104,20 @@ constexpr std::array<ActionContract, 44> kActionContracts{{
      "SummonEnemyTypeAtPlayer"},
     {kue::PlayerAction::ClearInsanity, kue::PlayerActionPayloadKind::PlayerTarget, "ClearInsanity"},
     {kue::PlayerAction::MaxInsanity, kue::PlayerActionPayloadKind::PlayerTarget, "MaxInsanity"},
+    {kue::PlayerAction::DepositShipScrap, kue::PlayerActionPayloadKind::None, "DepositShipScrap"},
+    {kue::PlayerAction::AddTerminalCredits, kue::PlayerActionPayloadKind::TerminalCredits,
+     "AddTerminalCredits"},
+    {kue::PlayerAction::ToggleThirdPerson, kue::PlayerActionPayloadKind::None, "ToggleThirdPerson"},
 }};
 
-constexpr std::array<kue::PlayerActionPayloadKind, 6> kPayloadKinds{{
+constexpr std::array<kue::PlayerActionPayloadKind, 7> kPayloadKinds{{
     kue::PlayerActionPayloadKind::None,
     kue::PlayerActionPayloadKind::PlayerTarget,
     kue::PlayerActionPayloadKind::EnemySpawn,
     kue::PlayerActionPayloadKind::EnemyAtPlayer,
     kue::PlayerActionPayloadKind::ItemAtPlayer,
     kue::PlayerActionPayloadKind::PlushieInterval,
+    kue::PlayerActionPayloadKind::TerminalCredits,
 }};
 
 constexpr kue::EnemyTypeId kEnemyType{{7U}, 3U};
@@ -126,6 +131,7 @@ std::array<kue::PlayerActionPayload, kPayloadKinds.size()> payloadFixtures() {
         kue::EnemyAtPlayerPayload{kEnemyType, 2U, kue::EnemySpawnArea::Outside, 17U},
         kue::ItemAtPlayerPayload{kItemType, 2U, 17U},
         kue::PlushieIntervalPayload{std::chrono::milliseconds{250}},
+        kue::TerminalCreditsPayload{2500},
     }};
 }
 
@@ -238,6 +244,18 @@ void testPayloadBoundaries(TestRun& run) {
                    {kue::PlayerAction::TogglePjManSpam,
                     kue::PlushieIntervalPayload{std::chrono::milliseconds{1000}}}) == Valid,
                "TogglePjManSpam", "one-second interval must be accepted");
+    run.expect(kue::validatePlayerActionRequest({kue::PlayerAction::AddTerminalCredits,
+                                                 kue::TerminalCreditsPayload{0}}) == InvalidPayload,
+               "AddTerminalCredits", "zero credits must be rejected");
+    run.expect(kue::validatePlayerActionRequest(
+                   {kue::PlayerAction::AddTerminalCredits,
+                    kue::TerminalCreditsPayload{kue::kMaximumTerminalCreditsPerAction + 1}}) ==
+                   InvalidPayload,
+               "AddTerminalCredits", "credits above the per-action limit must be rejected");
+    run.expect(kue::validatePlayerActionRequest(
+                   {kue::PlayerAction::AddTerminalCredits,
+                    kue::TerminalCreditsPayload{kue::kMaximumTerminalCreditsPerAction}}) == Valid,
+               "AddTerminalCredits", "the maximum credit amount is accepted");
     run.expect(kue::validatePlayerActionRequest(
                    {kue::PlayerAction::Kill,
                     kue::PlayerTargetPayload{std::numeric_limits<std::uint64_t>::max()}}) == Valid,
@@ -250,7 +268,8 @@ static_assert(std::is_same_v<decltype(kue::EnemySpawnPayload::enemyType), kue::E
 static_assert(std::is_same_v<decltype(kue::EnemyAtPlayerPayload::enemyType), kue::EnemyTypeId>);
 static_assert(std::is_same_v<decltype(kue::ItemAtPlayerPayload::itemType), kue::ItemTypeId>);
 static_assert(std::variant_size_v<kue::PlayerActionPayload> == kPayloadKinds.size());
-static_assert(static_cast<std::size_t>(kue::PlayerAction::MaxInsanity) == kActionContracts.size());
+static_assert(static_cast<std::size_t>(kue::PlayerAction::ToggleThirdPerson) ==
+              kActionContracts.size());
 
 }
 

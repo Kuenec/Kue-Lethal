@@ -1,6 +1,8 @@
 #include "core/Log.h"
 
 #include "core/Utf8.h"
+#include "platform/Environment.h"
+#include "platform/FileSystem.h"
 
 #include <array>
 #include <cerrno>
@@ -8,15 +10,10 @@
 #include <cstdarg>
 #include <cstdint>
 #include <cstdio>
-#include <cstdlib>
 #include <cstring>
-#include <ctime>
 #include <exception>
-#include <fcntl.h>
 #include <mutex>
 #include <string_view>
-#include <sys/stat.h>
-#include <unistd.h>
 
 namespace kue {
 
@@ -76,29 +73,17 @@ std::string_view logLevelName(LogLevel level) noexcept {
 Timestamp timestamp() {
     Timestamp result;
     const auto now = std::chrono::system_clock::now();
-    const auto wholeSeconds = std::chrono::floor<std::chrono::seconds>(now);
-    const auto milliseconds =
-        std::chrono::duration_cast<std::chrono::milliseconds>(now - wholeSeconds).count();
-    const std::time_t value = std::chrono::system_clock::to_time_t(wholeSeconds);
-    std::tm utc{};
-    errno = 0;
-    if (!::gmtime_r(&value, &utc)) {
-        const int code = errno != 0 ? errno : EOVERFLOW;
-        const int length = std::snprintf(result.text.data(), result.text.size(),
-                                         "timestamp-unavailable(errno=%d)", code);
-        if (length > 0)
-            result.size = static_cast<std::size_t>(length);
-        return result;
-    }
-    std::array<char, 20> calendar{};
-    if (std::strftime(calendar.data(), calendar.size(), "%Y-%m-%dT%H:%M:%S", &utc) != 19) {
-        constexpr std::string_view unavailable = "timestamp-unavailable";
-        std::memcpy(result.text.data(), unavailable.data(), unavailable.size());
-        result.size = unavailable.size();
-        return result;
-    }
-    const int length = std::snprintf(result.text.data(), result.text.size(), "%s.%03lldZ",
-                                     calendar.data(), static_cast<long long>(milliseconds));
+    const auto day = std::chrono::floor<std::chrono::days>(now);
+    const std::chrono::year_month_day calendar{day};
+    const std::chrono::hh_mm_ss timeOfDay{
+        std::chrono::duration_cast<std::chrono::milliseconds>(now - day)};
+    const int length = std::snprintf(
+        result.text.data(), result.text.size(), "%04d-%02u-%02uT%02lld:%02lld:%02lld.%03lldZ",
+        static_cast<int>(calendar.year()), static_cast<unsigned>(calendar.month()),
+        static_cast<unsigned>(calendar.day()), static_cast<long long>(timeOfDay.hours().count()),
+        static_cast<long long>(timeOfDay.minutes().count()),
+        static_cast<long long>(timeOfDay.seconds().count()),
+        static_cast<long long>(timeOfDay.subseconds().count()));
     if (length == 24) {
         result.size = static_cast<std::size_t>(length);
         return result;
@@ -151,26 +136,14 @@ DiagnosticTextStatus validateDiagnosticText(std::string_view text) noexcept {
 }
 
 LogDecoration decorationFor(FILE* stream, StreamFailure& failure) noexcept {
-    errno = 0;
-    const int descriptor = ::fileno(stream);
-    if (descriptor < 0) {
-        failure.operation = "inspect descriptor";
-        failure.code = errno != 0 ? errno : EBADF;
+    const platform::ConsoleInspection console = platform::inspectConsole(stream);
+    if (!console.succeeded) {
+        failure.operation =
+            console.errorCode == EBADF ? "inspect descriptor" : "inspect terminal capability";
+        failure.code = console.errorCode;
         return LogDecoration::Plain;
     }
-    errno = 0;
-    if (::isatty(descriptor) != 0)
-        return LogDecoration::Ansi;
-    if (errno == ENOTTY || errno == EINVAL)
-        return LogDecoration::Plain;
-    if (errno == 0) {
-        failure.operation = "inspect terminal capability";
-        failure.code = EIO;
-    } else {
-        failure.operation = "inspect terminal capability";
-        failure.code = errno;
-    }
-    return LogDecoration::Plain;
+    return console.ansi ? LogDecoration::Ansi : LogDecoration::Plain;
 }
 
 bool writeRecord(FILE* stream, LogRecord record, LogDecoration decoration, StreamFailure& failure) {
@@ -339,7 +312,10 @@ bool logInit(std::string_view path) {
         gLog.console = true;
         return false;
     }
-    gLog.console = ::getenv("KUE_CONSOLE") != nullptr || path.empty();
+    platform::EnvironmentStorage consoleRequest;
+    gLog.console = platform::readEnvironment("KUE_CONSOLE", consoleRequest).status !=
+                       platform::EnvironmentStatus::Unset ||
+                   path.empty();
     if (!isValidLogPath(path)) {
         gLog.console = true;
         rejectRecord(kInvalidLogPathMessage);
@@ -349,56 +325,45 @@ bool logInit(std::string_view path) {
         std::memcpy(gLog.filePath.data(), path.data(), path.size());
         gLog.filePath[path.size()] = '\0';
         gLog.filePathSize = path.size();
-        errno = 0;
-        const int descriptor = ::open(gLog.filePath.data(),
-                                      O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC | O_NONBLOCK, 0666);
-        if (descriptor < 0) {
-            const StreamFailure failure{"open", errno != 0 ? errno : EIO};
+        const platform::DescriptorResult opened = platform::openForAppend(gLog.filePath.data());
+        if (opened.descriptor < 0) {
+            const StreamFailure failure{"open", opened.errorCode};
             gLog.console = true;
             requireVisibleFailure(reportFileSinkFailure(failure));
             gLog.filePathSize = 0;
             return false;
         }
-        struct stat metadata{};
-        errno = 0;
-        if (::fstat(descriptor, &metadata) != 0) {
-            const StreamFailure failure{"inspect descriptor", errno != 0 ? errno : EIO};
-            requireVisibleFailure(reportFileSinkFailure(failure));
-            errno = 0;
-            if (::close(descriptor) != 0) {
-                const StreamFailure closeFailure{"close descriptor", errno != 0 ? errno : EIO};
+        const platform::FileInspection inspection = platform::inspectFile(opened.descriptor);
+        if (!inspection.succeeded || inspection.kind != platform::FileKind::Regular) {
+            if (!inspection.succeeded) {
+                const StreamFailure failure{"inspect descriptor", inspection.errorCode};
+                requireVisibleFailure(reportFileSinkFailure(failure));
+            } else {
+                requireVisibleFailure(reportNonregularFileSink());
+            }
+            if (const int closeCode = platform::closeDescriptor(opened.descriptor);
+                closeCode != 0) {
+                const StreamFailure closeFailure{"close descriptor", closeCode};
                 requireVisibleFailure(reportFileSinkFailure(closeFailure));
             }
             gLog.console = true;
             gLog.filePathSize = 0;
             return false;
         }
-        if (!S_ISREG(metadata.st_mode)) {
-            requireVisibleFailure(reportNonregularFileSink());
-            errno = 0;
-            if (::close(descriptor) != 0) {
-                const StreamFailure closeFailure{"close descriptor", errno != 0 ? errno : EIO};
+        const platform::StreamResult stream = platform::associateStream(opened.descriptor, "a");
+        if (!stream.stream) {
+            if (const int closeCode = platform::closeDescriptor(opened.descriptor);
+                closeCode != 0) {
+                const StreamFailure closeFailure{"close descriptor", closeCode};
                 requireVisibleFailure(reportFileSinkFailure(closeFailure));
             }
-            gLog.console = true;
-            gLog.filePathSize = 0;
-            return false;
-        }
-        errno = 0;
-        gLog.file = ::fdopen(descriptor, "a");
-        if (!gLog.file) {
-            const int associateCode = errno != 0 ? errno : EIO;
-            errno = 0;
-            if (::close(descriptor) != 0) {
-                const StreamFailure closeFailure{"close descriptor", errno != 0 ? errno : EIO};
-                requireVisibleFailure(reportFileSinkFailure(closeFailure));
-            }
-            const StreamFailure failure{"associate descriptor", associateCode};
+            const StreamFailure failure{"associate descriptor", stream.errorCode};
             gLog.console = true;
             requireVisibleFailure(reportFileSinkFailure(failure));
             gLog.filePathSize = 0;
             return false;
         }
+        gLog.file = stream.stream;
     }
     return writeInitializationRecord();
 }

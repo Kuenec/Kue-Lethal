@@ -1,6 +1,7 @@
 #include "main.h"
 
-#include <cstdlib>
+#include "platform/Environment.h"
+
 #include <cstring>
 #include <stdexcept>
 
@@ -21,9 +22,12 @@ namespace kue {
 
 BootResult boot() {
     kueFixtureRecordBoot();
-    const char* behavior = std::getenv("KUE_FIXTURE_BOOT");
-    if (!behavior)
+    platform::EnvironmentStorage storage;
+    const platform::EnvironmentValue requested =
+        platform::readEnvironment("KUE_FIXTURE_BOOT", storage);
+    if (requested.status != platform::EnvironmentStatus::Valid)
         return BootResult::Running;
+    const char* behavior = storage.data();
     if (std::strcmp(behavior, "configuration-failure") == 0)
         return BootResult::ConfigurationFailed;
     if (std::strcmp(behavior, "logging-failure") == 0)

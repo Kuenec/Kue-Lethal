@@ -2,15 +2,13 @@
 
 #include "core/Config.h"
 #include "core/Log.h"
-#include "core/Utf8.h"
 #include "game/LethalState.h"
 #include "overlay/InternalHud.h"
+#include "platform/Environment.h"
+#include "platform/Process.h"
 
-#include <cstdlib>
-#include <cstring>
 #include <mutex>
 #include <string_view>
-#include <unistd.h>
 #include <utility>
 
 namespace kue {
@@ -19,9 +17,7 @@ namespace {
 
 std::mutex gBootMutex;
 
-std::string_view boundedLogPath(const char* path) noexcept {
-    return {path, ::strnlen(path, kMaximumLogPathBytes + 1)};
-}
+static_assert(platform::kMaximumEnvironmentValueBytes == kMaximumLogPathBytes);
 
 }
 
@@ -42,28 +38,32 @@ BootResult boot() {
         KUE_ERR("configuration load failed: %s", configError.c_str());
         return BootResult::ConfigurationFailed;
     }
-    const char* logOverride = ::getenv("KUE_LOG");
+    platform::EnvironmentStorage logOverrideStorage;
+    const platform::EnvironmentValue logOverride =
+        platform::readEnvironment("KUE_LOG", logOverrideStorage);
     std::string_view runtimeLogPath = candidate.logPath;
-    if (logOverride) {
-        if (logOverride[0] == '\0') {
-            KUE_ERR("KUE_LOG is defined but empty");
-            return BootResult::LoggingFailed;
-        }
-        runtimeLogPath = boundedLogPath(logOverride);
-        if (runtimeLogPath.size() > kMaximumLogPathBytes) {
-            KUE_ERR("KUE_LOG exceeds the 4096-byte limit");
-            return BootResult::LoggingFailed;
-        }
-        if (!isValidUtf8(runtimeLogPath)) {
-            KUE_ERR("KUE_LOG must be valid UTF-8");
-            return BootResult::LoggingFailed;
-        }
+    switch (logOverride.status) {
+    case platform::EnvironmentStatus::Unset:
+        break;
+    case platform::EnvironmentStatus::Valid:
+        runtimeLogPath = logOverride.text;
+        break;
+    case platform::EnvironmentStatus::Empty:
+        KUE_ERR("KUE_LOG is defined but empty");
+        return BootResult::LoggingFailed;
+    case platform::EnvironmentStatus::TooLong:
+        KUE_ERR("KUE_LOG exceeds the 4096-byte limit");
+        return BootResult::LoggingFailed;
+    case platform::EnvironmentStatus::InvalidEncoding:
+        KUE_ERR("KUE_LOG must be valid UTF-8");
+        return BootResult::LoggingFailed;
     }
     if (!logInit(runtimeLogPath)) {
         return BootResult::LoggingFailed;
     }
 
-    KUE_INFO("kue-lethal module boot (pid %d)", getpid());
+    KUE_INFO("kue-lethal module boot (pid %lu)",
+             static_cast<unsigned long>(platform::currentProcessId()));
     KUE_INFO("%s", kBuildIdentity);
 
     config = std::move(candidate);

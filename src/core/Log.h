@@ -12,7 +12,7 @@ enum class LogLevel : std::uint8_t { Info, Warning, Error };
 inline constexpr std::size_t kMaximumLogPathBytes = 4096;
 
 bool logInit(std::string_view path);
-[[gnu::format(printf, 2, 3)]] void logFormat(LogLevel level, const char* format, ...);
+[[gnu::format(gnu_printf, 2, 3)]] void logFormat(LogLevel level, const char* format, ...);
 
 #define KUE_INFO(...)                                                                              \
     do {                                                                                           \

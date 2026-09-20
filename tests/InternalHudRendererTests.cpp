@@ -1,4 +1,6 @@
 #include "core/Config.h"
+
+#include "AlignedAllocation.h"
 #include "core/Log.h"
 #include "core/Utf8.h"
 #include "game/Game.h"
@@ -43,9 +45,9 @@ void* countedAllocation(std::size_t size) {
 
 #ifndef KUE_DISABLE_ALLOCATION_PROBE
 void* countedAlignedAllocation(std::size_t size, std::align_val_t alignment) {
-    void* allocation = nullptr;
     const std::size_t allocatedSize = size == 0 ? 1 : size;
-    if (posix_memalign(&allocation, static_cast<std::size_t>(alignment), allocatedSize) == 0) {
+    if (void* allocation =
+            kue::tests::allocateAligned(allocatedSize, static_cast<std::size_t>(alignment))) {
         gAllocations.fetch_add(1, std::memory_order_relaxed);
         gAllocatedBytes.fetch_add(size, std::memory_order_relaxed);
         return allocation;
@@ -128,19 +130,19 @@ void operator delete[](void* allocation, std::size_t) noexcept {
 }
 
 void operator delete(void* allocation, std::align_val_t) noexcept {
-    std::free(allocation);
+    kue::tests::releaseAligned(allocation);
 }
 
 void operator delete[](void* allocation, std::align_val_t) noexcept {
-    std::free(allocation);
+    kue::tests::releaseAligned(allocation);
 }
 
 void operator delete(void* allocation, std::size_t, std::align_val_t) noexcept {
-    std::free(allocation);
+    kue::tests::releaseAligned(allocation);
 }
 
 void operator delete[](void* allocation, std::size_t, std::align_val_t) noexcept {
-    std::free(allocation);
+    kue::tests::releaseAligned(allocation);
 }
 
 void operator delete(void* allocation, const std::nothrow_t&) noexcept {
@@ -152,11 +154,11 @@ void operator delete[](void* allocation, const std::nothrow_t&) noexcept {
 }
 
 void operator delete(void* allocation, std::align_val_t, const std::nothrow_t&) noexcept {
-    std::free(allocation);
+    kue::tests::releaseAligned(allocation);
 }
 
 void operator delete[](void* allocation, std::align_val_t, const std::nothrow_t&) noexcept {
-    std::free(allocation);
+    kue::tests::releaseAligned(allocation);
 }
 #endif
 

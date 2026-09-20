@@ -198,6 +198,105 @@ struct Utf16ToUtf8Result {
     return {Utf16ToUtf8Status::Success, input.codeUnitCount, outputIndex};
 }
 
+struct Utf8Input {
+    const char* bytes = nullptr;
+    std::size_t byteCount = 0;
+};
+
+struct Utf16Output {
+    std::uint16_t* codeUnits = nullptr;
+    std::size_t codeUnitCapacity = 0;
+};
+
+enum class Utf8ToUtf16Status : std::uint8_t {
+    Success,
+    NullInput,
+    EmptyInput,
+    EmbeddedNull,
+    InvalidUtf8,
+    OutputCapacityExceeded
+};
+
+struct Utf8ToUtf16Result {
+    Utf8ToUtf16Status status = Utf8ToUtf16Status::NullInput;
+    std::size_t validatedBytes = 0;
+    std::size_t utf16CodeUnits = 0;
+};
+
+[[nodiscard]] inline Utf8ToUtf16Result convertUtf8ToUtf16(Utf8Input input,
+                                                          Utf16Output output) noexcept {
+    if (!input.bytes)
+        return {Utf8ToUtf16Status::NullInput, 0, 0};
+    if (input.byteCount == 0)
+        return {Utf8ToUtf16Status::EmptyInput, 0, 0};
+    const std::string_view text(input.bytes, input.byteCount);
+    if (!isValidUtf8(text))
+        return {Utf8ToUtf16Status::InvalidUtf8, 0, 0};
+
+    std::size_t requiredCodeUnits = 0;
+    for (std::size_t index = 0; index < text.size();) {
+        const auto first = static_cast<unsigned char>(text[index]);
+        if (first == 0)
+            return {Utf8ToUtf16Status::EmbeddedNull, index, requiredCodeUnits};
+        if (first <= 0x7fU) {
+            index += 1;
+            requiredCodeUnits += 1;
+        } else if (first <= 0xdfU) {
+            index += 2;
+            requiredCodeUnits += 1;
+        } else if (first <= 0xefU) {
+            index += 3;
+            requiredCodeUnits += 1;
+        } else {
+            index += 4;
+            requiredCodeUnits += 2;
+        }
+    }
+    if (!output.codeUnits || output.codeUnitCapacity < requiredCodeUnits)
+        return {Utf8ToUtf16Status::OutputCapacityExceeded, text.size(), requiredCodeUnits};
+
+    std::size_t outputIndex = 0;
+    for (std::size_t index = 0; index < text.size();) {
+        const auto first = static_cast<unsigned char>(text[index]);
+        std::uint32_t scalar = 0;
+        if (first <= 0x7fU) {
+            scalar = first;
+            index += 1;
+        } else if (first <= 0xdfU) {
+            scalar = (static_cast<std::uint32_t>(first & 0x1fU) << 6U) |
+                     (static_cast<unsigned char>(text[index + 1]) & 0x3fU);
+            index += 2;
+        } else if (first <= 0xefU) {
+            scalar =
+                (static_cast<std::uint32_t>(first & 0x0fU) << 12U) |
+                (static_cast<std::uint32_t>(static_cast<unsigned char>(text[index + 1]) & 0x3fU)
+                 << 6U) |
+                (static_cast<unsigned char>(text[index + 2]) & 0x3fU);
+            index += 3;
+        } else {
+            scalar =
+                (static_cast<std::uint32_t>(first & 0x07U) << 18U) |
+                (static_cast<std::uint32_t>(static_cast<unsigned char>(text[index + 1]) & 0x3fU)
+                 << 12U) |
+                (static_cast<std::uint32_t>(static_cast<unsigned char>(text[index + 2]) & 0x3fU)
+                 << 6U) |
+                (static_cast<unsigned char>(text[index + 3]) & 0x3fU);
+            index += 4;
+        }
+        if (scalar <= 0xffffU) {
+            output.codeUnits[outputIndex] = static_cast<std::uint16_t>(scalar);
+            ++outputIndex;
+        } else {
+            const std::uint32_t offset = scalar - 0x10000U;
+            output.codeUnits[outputIndex] = static_cast<std::uint16_t>(0xd800U + (offset >> 10U));
+            output.codeUnits[outputIndex + 1] =
+                static_cast<std::uint16_t>(0xdc00U + (offset & 0x3ffU));
+            outputIndex += 2;
+        }
+    }
+    return {Utf8ToUtf16Status::Success, text.size(), outputIndex};
+}
+
 }
 
 #endif

@@ -2,6 +2,7 @@
 
 #include "core/Log.h"
 #include "mono/PeExport.h"
+#include "platform/ProcessMemory.h"
 
 #include <algorithm>
 #include <array>
@@ -10,15 +11,10 @@
 #include <capstone/capstone.h>
 #include <chrono>
 #include <cstring>
-#include <fstream>
 #include <limits>
 #include <mutex>
-#include <sstream>
 #include <string>
-#include <sys/mman.h>
-#include <sys/syscall.h>
 #include <thread>
-#include <unistd.h>
 
 namespace kue::mono {
 
@@ -96,7 +92,7 @@ struct CallbackBindingRequest {
 struct MemoryProtectionRequest {
     void* address;
     std::size_t length;
-    int protection;
+    platform::PageProtection protection;
 };
 
 enum class EmptyTextPolicy : std::uint8_t { Allowed, Rejected };
@@ -160,7 +156,7 @@ bool publishManagedCallback(const CallbackBinding* binding, std::uint64_t clearR
 }
 
 bool setMemoryProtection(MemoryProtectionRequest request) {
-    return syscall(SYS_mprotect, request.address, request.length, request.protection) == 0;
+    return platform::setProtection(request.address, request.length, request.protection);
 }
 
 void dispatchManagedCallback(const CallbackBinding* expectedBinding) {
@@ -558,37 +554,18 @@ bool installCompiledMethodCallback(MonoMethod* method, MainThreadCallback callba
 
     void* code = nullptr;
     int codeSize = 0;
-    int originalCodeProtection = PROT_READ | PROT_EXEC;
+    platform::PageProtection originalCodeProtection = platform::kPageReadExecute;
     std::size_t executableMaps = 0;
     std::size_t probes = 0;
     std::size_t jitHits = 0;
-    std::ifstream maps("/proc/self/maps");
-    std::string line;
-    while (!code && std::getline(maps, line)) {
-        std::istringstream row(line);
-        std::string range, perms, offset, device, inode, path;
-        if (!(row >> range >> perms >> offset >> device >> inode))
+    platform::MemoryRegionScan regions;
+    platform::MemoryRegion region;
+    while (!code && regions.next(region)) {
+        if (!region.executable || region.kind != platform::MemoryRegionKind::Private)
             continue;
-        std::getline(row, path);
-        const auto first = path.find_first_not_of(' ');
-        path = first == std::string::npos ? "" : path.substr(first);
-        if (perms.find('x') == std::string::npos)
-            continue;
-        if (!path.empty() && path.front() != '[' && path.find("memfd") == std::string::npos)
-            continue;
-        const auto dash = range.find('-');
-        if (dash == std::string::npos)
-            continue;
-        std::uintptr_t begin = 0, end = 0;
-        try {
-            begin = std::stoull(range.substr(0, dash), nullptr, 16);
-            end = std::stoull(range.substr(dash + 1), nullptr, 16);
-        } catch (...) {
-            continue;
-        }
         ++executableMaps;
 
-        for (std::uintptr_t address = begin; address < end; address += 64) {
+        for (std::uintptr_t address = region.begin; address < region.end; address += 64) {
             ++probes;
             void* ji = gMono.jit_info_table_find(domain, std::bit_cast<void*>(address));
             if (!ji)
@@ -600,13 +577,7 @@ bool installCompiledMethodCallback(MonoMethod* method, MainThreadCallback callba
             if (jiMethod == method && jiCode && jiSize > 16) {
                 code = jiCode;
                 codeSize = jiSize;
-                originalCodeProtection = 0;
-                if (!perms.empty() && perms[0] == 'r')
-                    originalCodeProtection |= PROT_READ;
-                if (perms.size() > 1 && perms[1] == 'w')
-                    originalCodeProtection |= PROT_WRITE;
-                if (perms.size() > 2 && perms[2] == 'x')
-                    originalCodeProtection |= PROT_EXEC;
+                originalCodeProtection = region.protection;
                 break;
             }
             if (jiCode && jiSize > 0) {
@@ -623,30 +594,24 @@ bool installCompiledMethodCallback(MonoMethod* method, MainThreadCallback callba
         return false;
     }
 
-    const long pageSizeLong = sysconf(_SC_PAGESIZE);
-    const std::size_t pageSize = pageSizeLong > 0 ? static_cast<std::size_t>(pageSizeLong) : 4096;
+    const std::size_t pageSize = platform::pageSize();
     const auto target = reinterpret_cast<std::uintptr_t>(code);
     const auto pageMask = ~(static_cast<std::uintptr_t>(pageSize) - 1u);
     const auto targetPage = target & pageMask;
-    void* executable = MAP_FAILED;
-#ifdef MAP_FIXED_NOREPLACE
-
+    void* executable = nullptr;
     constexpr std::uintptr_t kStep = 1u << 20;
     constexpr std::uintptr_t kLimit = 0x70000000u;
-    for (std::uintptr_t distance = kStep; distance < kLimit && executable == MAP_FAILED;
-         distance += kStep) {
+    for (std::uintptr_t distance = kStep; distance < kLimit && !executable; distance += kStep) {
         for (int direction : {-1, 1}) {
             std::uintptr_t hint = direction < 0 ? targetPage - distance : targetPage + distance;
             if (direction < 0 && distance > targetPage)
                 continue;
-            executable = mmap(std::bit_cast<void*>(hint), pageSize, PROT_READ | PROT_WRITE,
-                              MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE, -1, 0);
-            if (executable != MAP_FAILED)
+            executable = platform::reserveNear(hint, pageSize);
+            if (executable)
                 break;
         }
     }
-#endif
-    if (executable == MAP_FAILED) {
+    if (!executable) {
         KUE_WARN("mono: could not allocate a near trampoline for late injection");
         return false;
     }
@@ -654,7 +619,7 @@ bool installCompiledMethodCallback(MonoMethod* method, MainThreadCallback callba
     csh capstone = 0;
     cs_insn* instructions = nullptr;
     if (cs_open(CS_ARCH_X86, CS_MODE_64, &capstone) != CS_ERR_OK) {
-        munmap(executable, pageSize);
+        platform::releaseReservation(executable, pageSize);
         return false;
     }
     cs_option(capstone, CS_OPT_DETAIL, CS_OPT_ON);
@@ -669,7 +634,7 @@ bool installCompiledMethodCallback(MonoMethod* method, MainThreadCallback callba
         if (instructions)
             cs_free(instructions, count);
         cs_close(&capstone);
-        munmap(executable, pageSize);
+        platform::releaseReservation(executable, pageSize);
         KUE_WARN("mono: compiled Update prologue cannot be patched atomically");
         return false;
     }
@@ -730,7 +695,7 @@ bool installCompiledMethodCallback(MonoMethod* method, MainThreadCallback callba
     cs_free(instructions, count);
     cs_close(&capstone);
     if (!relocatable) {
-        munmap(executable, pageSize);
+        platform::releaseReservation(executable, pageSize);
         KUE_WARN("mono: compiled Update prologue contains an unsupported relative instruction");
         return false;
     }
@@ -751,7 +716,7 @@ bool installCompiledMethodCallback(MonoMethod* method, MainThreadCallback callba
     if (relayAddress >= jumpEnd) {
         const std::uintptr_t distance = relayAddress - jumpEnd;
         if (distance > static_cast<std::uintptr_t>(std::numeric_limits<std::int32_t>::max())) {
-            munmap(executable, pageSize);
+            platform::releaseReservation(executable, pageSize);
             return false;
         }
         relativeJump = static_cast<std::int32_t>(distance);
@@ -760,15 +725,16 @@ bool installCompiledMethodCallback(MonoMethod* method, MainThreadCallback callba
         constexpr std::uintptr_t kMinimumMagnitude =
             static_cast<std::uintptr_t>(std::numeric_limits<std::int32_t>::max()) + 1;
         if (distance > kMinimumMagnitude) {
-            munmap(executable, pageSize);
+            platform::releaseReservation(executable, pageSize);
             return false;
         }
         relativeJump = distance == kMinimumMagnitude ? std::numeric_limits<std::int32_t>::min()
                                                      : -static_cast<std::int32_t>(distance);
     }
-    if (!setMemoryProtection(
-            {.address = executable, .length = pageSize, .protection = PROT_READ | PROT_EXEC})) {
-        munmap(executable, pageSize);
+    if (!setMemoryProtection({.address = executable,
+                              .length = pageSize,
+                              .protection = platform::kPageReadExecute})) {
+        platform::releaseReservation(executable, pageSize);
         KUE_WARN("mono: could not make the compiled trampoline executable");
         return false;
     }
@@ -777,8 +743,8 @@ bool installCompiledMethodCallback(MonoMethod* method, MainThreadCallback callba
     const auto protectEnd = (target + 8 + pageSize - 1u) & pageMask;
     if (!setMemoryProtection({.address = std::bit_cast<void*>(protectStart),
                               .length = protectEnd - protectStart,
-                              .protection = PROT_READ | PROT_WRITE | PROT_EXEC})) {
-        munmap(executable, pageSize);
+                              .protection = platform::kPageReadWriteExecute})) {
+        platform::releaseReservation(executable, pageSize);
         KUE_WARN("mono: could not make compiled Update writable");
         return false;
     }
@@ -788,7 +754,7 @@ bool installCompiledMethodCallback(MonoMethod* method, MainThreadCallback callba
                                                             .context = context,
                                                             .compiledTrampoline = trampoline});
     if (!binding) {
-        munmap(executable, pageSize);
+        platform::releaseReservation(executable, pageSize);
         return false;
     }
     gCompiledMethodBinding.store(binding, std::memory_order_release);
@@ -800,7 +766,7 @@ bool installCompiledMethodCallback(MonoMethod* method, MainThreadCallback callba
     std::memcpy(&patchWord, patch, sizeof(patchWord));
     reinterpret_cast<std::atomic<std::uint64_t>*>(code)->store(patchWord,
                                                                std::memory_order_seq_cst);
-    __builtin___clear_cache(reinterpret_cast<char*>(code), reinterpret_cast<char*>(code) + 8);
+    platform::flushInstructionCache(code, 8);
     setMemoryProtection({.address = std::bit_cast<void*>(protectStart),
                          .length = protectEnd - protectStart,
                          .protection = originalCodeProtection});

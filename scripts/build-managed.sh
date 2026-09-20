@@ -37,6 +37,20 @@ if [[ -z "$managed" ]]; then
         "$steam_game/Lethal Company_Data/Managed"
         "$flatpak_game/Lethal Company_Data/Managed"
     )
+    for libraryfolders in \
+        "$data_home/Steam/steamapps/libraryfolders.vdf" \
+        "$HOME/.steam/steam/steamapps/libraryfolders.vdf" \
+        "$flatpak_steam/steamapps/libraryfolders.vdf"; do
+        if [[ -f "$libraryfolders" ]]; then
+            while IFS= read -r path_value; do
+                if [[ -n "$path_value" ]]; then
+                    candidates+=(
+                        "$path_value/steamapps/common/Lethal Company/Lethal Company_Data/Managed"
+                    )
+                fi
+            done < <(sed -n 's/.*"path"[[:space:]]*"\([^"]*\)".*/\1/p' "$libraryfolders")
+        fi
+    done
     for candidate in "${candidates[@]}"; do
         if [[ -f "$candidate/Assembly-CSharp.dll" ]]; then
             managed="$candidate"
@@ -54,18 +68,19 @@ fi
 compiler="${KUE_CSC:-}"
 if [[ -z "$compiler" ]]; then
     mapfile -t compilers < <(
-        find /usr/share/wine/mono -type f \
-            -path '*/lib/mono/4.5/csc.exe' -print 2>/dev/null |
-            sort
+        {
+            find /usr/share/wine/mono /usr/share/steam/compatibilitytools.d \
+                "$data_home/Steam/compatibilitytools.d" \
+                "$HOME/.steam/steam/compatibilitytools.d" \
+                "$steam_common" \
+                -type f -path '*/share/wine/mono/*/lib/mono/4.5/csc.exe' -print 2>/dev/null
+        } | sort -u
     )
-    if ((${#compilers[@]} == 1)); then
-        compiler="${compilers[0]}"
-    elif ((${#compilers[@]} > 1)); then
-        printf '%s%s\n' \
-            'error: multiple Wine Mono C# compilers found; ' \
-            'set KUE_CSC to the intended csc.exe' >&2
-        printf '  %s\n' "${compilers[@]}" >&2
-        exit 1
+    if ((${#compilers[@]} >= 1)); then
+        compiler="${compilers[-1]}"
+        if ((${#compilers[@]} > 1)); then
+            printf '[kue] multiple Wine Mono compilers found; using %s\n' "$compiler" >&2
+        fi
     fi
 fi
 if [[ -z "$compiler" || ! -f "$compiler" ]]; then

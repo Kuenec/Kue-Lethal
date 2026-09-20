@@ -22,11 +22,14 @@ set(KUE_JSON_SOURCE_DIR "" CACHE PATH "nlohmann/json 3.11.3 source directory use
 if(KUE_BUILD_MODULE)
   set(KUE_IMGUI_SOURCE_DIR "" CACHE PATH "Dear ImGui 1.91.9b source directory used when fetching is disabled")
   set(KUE_GAME_MANAGED_DIR "" CACHE PATH "Lethal Company Managed assembly directory")
+  if(WIN32)
+    set(KUE_CAPSTONE_SOURCE_DIR "" CACHE PATH "Capstone 5.0.9 source directory used when fetching is disabled")
+  endif()
 endif()
 
-if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux" OR
+if(NOT CMAKE_SYSTEM_NAME MATCHES "^(Linux|Windows)$" OR
    NOT CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
-  message(FATAL_ERROR "Kue Lethal supports Linux x86-64 only")
+  message(FATAL_ERROR "Kue Lethal supports Linux x86-64 and Windows x86-64 only")
 endif()
 
 if(NOT CMAKE_CXX_COMPILER_ID MATCHES "^(GNU|Clang)$")
@@ -63,6 +66,36 @@ elseif(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
   list(APPEND KUE_STRICT_COMPILE_OPTIONS -Wextra-semi)
 endif()
 
+if(WIN32)
+  add_link_options(-static $<$<CONFIG:Release>:-s>)
+  set(KUE_PLATFORM_SOURCES
+    src/platform/EnvironmentWindows.cpp
+    src/platform/FileSystemWindows.cpp
+    src/platform/ProcessMemoryWindows.cpp
+    src/platform/ProcessWindows.cpp
+  )
+  set(KUE_PLATFORM_HEADERS
+    src/platform/Environment.h
+    src/platform/FileSystem.h
+    src/platform/Process.h
+    src/platform/ProcessMemory.h
+    src/platform/WindowsSupport.h
+  )
+else()
+  set(KUE_PLATFORM_SOURCES
+    src/platform/EnvironmentPosix.cpp
+    src/platform/FileSystemPosix.cpp
+    src/platform/ProcessMemoryPosix.cpp
+    src/platform/ProcessPosix.cpp
+  )
+  set(KUE_PLATFORM_HEADERS
+    src/platform/Environment.h
+    src/platform/FileSystem.h
+    src/platform/Process.h
+    src/platform/ProcessMemory.h
+  )
+endif()
+
 set(KUE_PRODUCTION_SOURCES
   src/core/Config.cpp
   src/core/Log.cpp
@@ -82,6 +115,7 @@ set(KUE_PRODUCTION_HEADERS
   src/core/Config.h
   src/core/Log.h
   src/core/Utf8.h
+  src/entry/RemoteStart.h
   src/game/Game.h
   src/game/LethalState.h
   src/game/PlayerActions.h
@@ -100,6 +134,7 @@ set(KUE_BUILD_IDENTITY_PROJECT_INPUTS
   CMakeLists.txt
   cmake/BuildIdentity.cmake
   cmake/BuildIdentity.cpp.in
+  cmake/MinGWx86_64.cmake
   cmake/deps.cmake
   config/kuelethal.json
   scripts/entry-validation.sh
@@ -107,7 +142,12 @@ set(KUE_BUILD_IDENTITY_PROJECT_INPUTS
   src/managed/KueInternalHud.cs
   ${KUE_PRODUCTION_SOURCES}
   ${KUE_PRODUCTION_HEADERS}
+  ${KUE_PLATFORM_SOURCES}
+  ${KUE_PLATFORM_HEADERS}
 )
+if(WIN32)
+  list(APPEND KUE_BUILD_IDENTITY_PROJECT_INPUTS src/inject/Injector.cpp)
+endif()
 include(cmake/BuildIdentity.cmake)
 set(KUE_BUILD_IDENTITY_DEPENDENCY_LABELS
   tool/cmake
@@ -130,7 +170,9 @@ set(KUE_BUILD_IDENTITY_DEPENDENCY_PATHS
 
 message(STATUS "Kue Lethal production module: ${KUE_BUILD_MODULE}")
 if(BUILD_TESTING)
-  find_program(KUE_BASH_EXECUTABLE bash REQUIRED)
+  if(NOT WIN32)
+    find_program(KUE_BASH_EXECUTABLE bash REQUIRED)
+  endif()
 
   if(KUE_BUILD_MODULE)
     message(STATUS "Kue Lethal test graph: full native guards")
@@ -148,25 +190,35 @@ if(KUE_BUILD_MODULE OR BUILD_TESTING)
 endif()
 
 if(KUE_BUILD_MODULE)
-  find_package(PkgConfig REQUIRED)
-  pkg_check_modules(CAPSTONE REQUIRED IMPORTED_TARGET capstone>=5.0 capstone<6.0)
+  if(NOT WIN32)
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(CAPSTONE REQUIRED IMPORTED_TARGET capstone>=5.0 capstone<6.0)
+  endif()
   find_program(KUE_WINE_EXECUTABLE wine REQUIRED)
   find_program(KUE_WINEPATH_EXECUTABLE winepath REQUIRED)
 
   set(KUE_CSC "$ENV{KUE_CSC}" CACHE FILEPATH "Wine Mono C# compiler")
   if(NOT KUE_CSC)
-    file(GLOB KUE_CSC_CANDIDATES LIST_DIRECTORIES FALSE
+    set(KUE_CSC_GLOBS
       "/usr/share/wine/mono/*/lib/mono/4.5/csc.exe"
+      "/usr/share/steam/compatibilitytools.d/*/files/share/wine/mono/*/lib/mono/4.5/csc.exe"
     )
+    if(DEFINED ENV{HOME})
+      list(APPEND KUE_CSC_GLOBS
+        "$ENV{HOME}/.local/share/Steam/compatibilitytools.d/*/files/share/wine/mono/*/lib/mono/4.5/csc.exe"
+        "$ENV{HOME}/.steam/steam/compatibilitytools.d/*/files/share/wine/mono/*/lib/mono/4.5/csc.exe"
+        "$ENV{HOME}/.local/share/Steam/steamapps/common/Proton*/files/share/wine/mono/*/lib/mono/4.5/csc.exe"
+      )
+    endif()
+    file(GLOB KUE_CSC_CANDIDATES LIST_DIRECTORIES FALSE ${KUE_CSC_GLOBS})
     list(SORT KUE_CSC_CANDIDATES)
     list(LENGTH KUE_CSC_CANDIDATES KUE_CSC_CANDIDATE_COUNT)
-    if(KUE_CSC_CANDIDATE_COUNT EQUAL 1)
-      list(GET KUE_CSC_CANDIDATES 0 KUE_CSC)
+    if(KUE_CSC_CANDIDATE_COUNT GREATER 0)
+      list(GET KUE_CSC_CANDIDATES -1 KUE_CSC)
       set(KUE_CSC "${KUE_CSC}" CACHE FILEPATH "Wine Mono C# compiler" FORCE)
-    elseif(KUE_CSC_CANDIDATE_COUNT GREATER 1)
-      message(FATAL_ERROR
-        "Multiple Wine Mono C# compilers were found; set KUE_CSC to the intended csc.exe"
-      )
+      if(KUE_CSC_CANDIDATE_COUNT GREATER 1)
+        message(STATUS "Multiple Wine Mono C# compilers found; using ${KUE_CSC}")
+      endif()
     else()
       message(FATAL_ERROR
         "Wine Mono C# compiler was not found; install Wine Mono or set KUE_CSC to its csc.exe"
@@ -222,7 +274,26 @@ if(KUE_BUILD_MODULE AND NOT KUE_FETCH_DEPS)
     )
   endif()
   set(imgui_source_SOURCE_DIR "${KUE_IMGUI_SOURCE_DIR}")
+  if(WIN32)
+    if(NOT KUE_CAPSTONE_SOURCE_DIR)
+      message(FATAL_ERROR
+        "KUE_FETCH_DEPS=OFF requires KUE_CAPSTONE_SOURCE_DIR to name a Capstone 5.0.9 source tree"
+      )
+    endif()
+    set(capstone_source_SOURCE_DIR "${KUE_CAPSTONE_SOURCE_DIR}")
+  endif()
 endif()
+
+add_library(kue-platform STATIC ${KUE_PLATFORM_SOURCES})
+target_include_directories(kue-platform PUBLIC src)
+target_compile_options(kue-platform PRIVATE ${KUE_STRICT_COMPILE_OPTIONS})
+if(NOT WIN32)
+  target_link_libraries(kue-platform PUBLIC ${CMAKE_DL_LIBS})
+endif()
+set_target_properties(kue-platform PROPERTIES
+  INTERPROCEDURAL_OPTIMIZATION_RELEASE TRUE
+  NO_SYSTEM_FROM_IMPORTED TRUE
+)
 
 if(KUE_BUILD_MODULE)
   foreach(KUE_IMGUI_FILE imgui.h imgui.cpp imgui_draw.cpp imgui_tables.cpp imgui_widgets.cpp)
@@ -262,8 +333,46 @@ if(KUE_BUILD_MODULE)
     "${imgui_source_SOURCE_DIR}/imgui_tables.cpp"
     "${imgui_source_SOURCE_DIR}/imgui_widgets.cpp"
   )
-  target_include_directories(imgui PUBLIC "${imgui_source_SOURCE_DIR}")
-  target_compile_options(imgui PRIVATE ${KUE_STRICT_COMPILE_OPTIONS})
+  target_include_directories(imgui SYSTEM PUBLIC "${imgui_source_SOURCE_DIR}")
+
+  if(WIN32)
+    if(NOT EXISTS "${capstone_source_SOURCE_DIR}/CMakeLists.txt" OR
+       NOT EXISTS "${capstone_source_SOURCE_DIR}/include/capstone/capstone.h")
+      message(FATAL_ERROR "Capstone source is incomplete: ${capstone_source_SOURCE_DIR}")
+    endif()
+    file(STRINGS "${capstone_source_SOURCE_DIR}/ChangeLog" KUE_CAPSTONE_VERSION_LINE
+         REGEX "^Version 5\\.0\\.9" LIMIT_COUNT 1)
+    if(NOT KUE_CAPSTONE_VERSION_LINE)
+      message(FATAL_ERROR "Capstone source must be exactly version 5.0.9")
+    endif()
+    enable_language(C)
+    set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+    set(BUILD_STATIC_LIBS ON CACHE BOOL "" FORCE)
+    set(CAPSTONE_ARCHITECTURE_DEFAULT OFF CACHE BOOL "" FORCE)
+    set(CAPSTONE_X86_SUPPORT ON CACHE BOOL "" FORCE)
+    set(CAPSTONE_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+    set(CAPSTONE_BUILD_CSTOOL OFF CACHE BOOL "" FORCE)
+    set(CAPSTONE_BUILD_CSTEST OFF CACHE BOOL "" FORCE)
+    set(CAPSTONE_INSTALL OFF CACHE BOOL "" FORCE)
+    add_subdirectory("${capstone_source_SOURCE_DIR}" "${CMAKE_BINARY_DIR}/capstone" EXCLUDE_FROM_ALL)
+    set(KUE_CAPSTONE_TARGET capstone_static)
+    file(GLOB KUE_CAPSTONE_BUILD_INPUTS LIST_DIRECTORIES FALSE RELATIVE "${capstone_source_SOURCE_DIR}"
+      "${capstone_source_SOURCE_DIR}/CMakeLists.txt"
+      "${capstone_source_SOURCE_DIR}/*.c"
+      "${capstone_source_SOURCE_DIR}/*.h"
+      "${capstone_source_SOURCE_DIR}/arch/X86/*"
+      "${capstone_source_SOURCE_DIR}/include/capstone/*.h"
+    )
+    list(SORT KUE_CAPSTONE_BUILD_INPUTS)
+    foreach(KUE_CAPSTONE_BUILD_INPUT IN LISTS KUE_CAPSTONE_BUILD_INPUTS)
+      list(APPEND KUE_BUILD_IDENTITY_DEPENDENCY_LABELS "capstone/${KUE_CAPSTONE_BUILD_INPUT}")
+      list(APPEND KUE_BUILD_IDENTITY_DEPENDENCY_PATHS
+        "${capstone_source_SOURCE_DIR}/${KUE_CAPSTONE_BUILD_INPUT}"
+      )
+    endforeach()
+  else()
+    set(KUE_CAPSTONE_TARGET PkgConfig::CAPSTONE)
+  endif()
 
   add_library(kuelethal MODULE ${KUE_PRODUCTION_SOURCES})
   target_include_directories(kuelethal PRIVATE src)
@@ -271,9 +380,9 @@ if(KUE_BUILD_MODULE)
   target_link_libraries(kuelethal PRIVATE
     imgui
     nlohmann_json::nlohmann_json
-    PkgConfig::CAPSTONE
+    ${KUE_CAPSTONE_TARGET}
     Threads::Threads
-    ${CMAKE_DL_LIBS}
+    kue-platform
   )
   set_target_properties(kuelethal PROPERTIES
     PREFIX ""
@@ -281,6 +390,17 @@ if(KUE_BUILD_MODULE)
     NO_SYSTEM_FROM_IMPORTED TRUE
   )
   set_property(TARGET kuelethal PROPERTY INTERPROCEDURAL_OPTIMIZATION_RELEASE TRUE)
+
+  if(WIN32)
+    add_executable(kue-inject src/inject/Injector.cpp)
+    target_include_directories(kue-inject PRIVATE src)
+    target_compile_options(kue-inject PRIVATE ${KUE_STRICT_COMPILE_OPTIONS})
+    target_link_libraries(kue-inject PRIVATE kue-platform)
+    set_target_properties(kue-inject PROPERTIES
+      INTERPROCEDURAL_OPTIMIZATION_RELEASE TRUE
+      NO_SYSTEM_FROM_IMPORTED TRUE
+    )
+  endif()
 
   if(NOT KUE_GAME_MANAGED_DIR)
     set(KUE_GAME_MANAGED_CANDIDATES)
@@ -303,7 +423,21 @@ if(KUE_BUILD_MODULE)
         "$ENV{HOME}/.steam/steam/steamapps/common/Lethal Company/Lethal Company_Data/Managed"
         "$ENV{HOME}/.var/app/com.valvesoftware.Steam/data/Steam/steamapps/common/Lethal Company/Lethal Company_Data/Managed"
       )
+      foreach(KUE_LIBRARYFOLDER_VDF
+          "$ENV{HOME}/.local/share/Steam/steamapps/libraryfolders.vdf"
+          "$ENV{HOME}/.steam/steam/steamapps/libraryfolders.vdf"
+          "$ENV{HOME}/.var/app/com.valvesoftware.Steam/data/Steam/steamapps/libraryfolders.vdf")
+        if(EXISTS "${KUE_LIBRARYFOLDER_VDF}")
+          file(READ "${KUE_LIBRARYFOLDER_VDF}" KUE_LIBRARYFOLDER_CONTENT)
+          string(REGEX MATCHALL "\"path\"[ \t]+\"[^\"]+\"" KUE_LIBRARYFOLDER_PATHS "${KUE_LIBRARYFOLDER_CONTENT}")
+          foreach(KUE_LIBRARYFOLDER_ENTRY IN LISTS KUE_LIBRARYFOLDER_PATHS)
+            string(REGEX REPLACE ".*\"([^\"]+)\"" "\\1" KUE_LIBRARYFOLDER_PATH "${KUE_LIBRARYFOLDER_ENTRY}")
+            list(APPEND KUE_GAME_MANAGED_CANDIDATES "${KUE_LIBRARYFOLDER_PATH}/steamapps/common/Lethal Company/Lethal Company_Data/Managed")
+          endforeach()
+        endif()
+      endforeach()
     endif()
+    list(REMOVE_DUPLICATES KUE_GAME_MANAGED_CANDIDATES)
     foreach(KUE_GAME_MANAGED_CANDIDATE IN LISTS KUE_GAME_MANAGED_CANDIDATES)
       if(EXISTS "${KUE_GAME_MANAGED_CANDIDATE}/Assembly-CSharp.dll")
         set(KUE_GAME_MANAGED_DIR "${KUE_GAME_MANAGED_CANDIDATE}" CACHE PATH
@@ -421,40 +555,42 @@ if(KUE_BUILD_MODULE)
     )
   endforeach()
 
-  find_path(KUE_CAPSTONE_HEADER_ROOT capstone/capstone.h REQUIRED)
-  set(KUE_CAPSTONE_BUILD_HEADERS
-    arm.h
-    arm64.h
-    bpf.h
-    capstone.h
-    evm.h
-    m680x.h
-    m68k.h
-    mips.h
-    mos65xx.h
-    platform.h
-    ppc.h
-    riscv.h
-    sh.h
-    sparc.h
-    systemz.h
-    tms320c64x.h
-    tricore.h
-    wasm.h
-    x86.h
-    xcore.h
-  )
-  foreach(KUE_CAPSTONE_BUILD_HEADER IN LISTS KUE_CAPSTONE_BUILD_HEADERS)
-    list(APPEND KUE_BUILD_IDENTITY_DEPENDENCY_LABELS
-      "capstone/include/${KUE_CAPSTONE_BUILD_HEADER}"
+  if(NOT WIN32)
+    find_path(KUE_CAPSTONE_HEADER_ROOT capstone/capstone.h REQUIRED)
+    set(KUE_CAPSTONE_BUILD_HEADERS
+      arm.h
+      arm64.h
+      bpf.h
+      capstone.h
+      evm.h
+      m680x.h
+      m68k.h
+      mips.h
+      mos65xx.h
+      platform.h
+      ppc.h
+      riscv.h
+      sh.h
+      sparc.h
+      systemz.h
+      tms320c64x.h
+      tricore.h
+      wasm.h
+      x86.h
+      xcore.h
     )
-    list(APPEND KUE_BUILD_IDENTITY_DEPENDENCY_PATHS
-      "${KUE_CAPSTONE_HEADER_ROOT}/capstone/${KUE_CAPSTONE_BUILD_HEADER}"
-    )
-  endforeach()
-  find_library(KUE_CAPSTONE_LIBRARY_FILE NAMES capstone HINTS ${CAPSTONE_LIBRARY_DIRS} REQUIRED)
-  list(APPEND KUE_BUILD_IDENTITY_DEPENDENCY_LABELS capstone/library)
-  list(APPEND KUE_BUILD_IDENTITY_DEPENDENCY_PATHS "${KUE_CAPSTONE_LIBRARY_FILE}")
+    foreach(KUE_CAPSTONE_BUILD_HEADER IN LISTS KUE_CAPSTONE_BUILD_HEADERS)
+      list(APPEND KUE_BUILD_IDENTITY_DEPENDENCY_LABELS
+        "capstone/include/${KUE_CAPSTONE_BUILD_HEADER}"
+      )
+      list(APPEND KUE_BUILD_IDENTITY_DEPENDENCY_PATHS
+        "${KUE_CAPSTONE_HEADER_ROOT}/capstone/${KUE_CAPSTONE_BUILD_HEADER}"
+      )
+    endforeach()
+    find_library(KUE_CAPSTONE_LIBRARY_FILE NAMES capstone HINTS ${CAPSTONE_LIBRARY_DIRS} REQUIRED)
+    list(APPEND KUE_BUILD_IDENTITY_DEPENDENCY_LABELS capstone/library)
+    list(APPEND KUE_BUILD_IDENTITY_DEPENDENCY_PATHS "${KUE_CAPSTONE_LIBRARY_FILE}")
+  endif()
 
   set(KUE_MANAGED_SOURCE "${CMAKE_SOURCE_DIR}/src/managed/KueInternalHud.cs")
   set(KUE_MANAGED_HUD "${CMAKE_BINARY_DIR}/managed/KueInternalHud.dll")
@@ -563,157 +699,132 @@ if(KUE_BUILD_MODULE)
 endif()
 
 if(BUILD_TESTING)
-  add_executable(kue-config-tests tests/ConfigTests.cpp src/core/Config.cpp)
-  target_include_directories(kue-config-tests PRIVATE src)
-  target_compile_options(kue-config-tests PRIVATE ${KUE_STRICT_COMPILE_OPTIONS})
-  target_link_libraries(kue-config-tests PRIVATE nlohmann_json::nlohmann_json)
-  set_target_properties(kue-config-tests PROPERTIES
-    INTERPROCEDURAL_OPTIMIZATION_RELEASE TRUE
-    NO_SYSTEM_FROM_IMPORTED TRUE
-  )
-  add_test(NAME kue-config COMMAND kue-config-tests)
+  function(kue_add_test_executable KUE_TEST_TARGET)
+    add_executable(${KUE_TEST_TARGET} ${ARGN})
+    target_include_directories(${KUE_TEST_TARGET} PRIVATE src)
+    target_compile_options(${KUE_TEST_TARGET} PRIVATE ${KUE_STRICT_COMPILE_OPTIONS})
+    set_target_properties(${KUE_TEST_TARGET} PROPERTIES
+      INTERPROCEDURAL_OPTIMIZATION_RELEASE TRUE
+      NO_SYSTEM_FROM_IMPORTED TRUE
+    )
+  endfunction()
 
-  add_executable(kue-log-tests tests/LogTests.cpp src/core/Log.cpp)
-  target_include_directories(kue-log-tests PRIVATE src)
-  target_compile_options(kue-log-tests PRIVATE ${KUE_STRICT_COMPILE_OPTIONS})
-  target_link_libraries(kue-log-tests PRIVATE Threads::Threads)
-  set_target_properties(kue-log-tests PROPERTIES
-    INTERPROCEDURAL_OPTIMIZATION_RELEASE TRUE
-    NO_SYSTEM_FROM_IMPORTED TRUE
-  )
-  add_test(NAME kue-log COMMAND kue-log-tests)
-
-  add_executable(kue-player-action-queue-tests tests/PlayerActionQueueTests.cpp)
-  target_include_directories(kue-player-action-queue-tests PRIVATE src)
-  target_compile_options(kue-player-action-queue-tests PRIVATE ${KUE_STRICT_COMPILE_OPTIONS})
+  kue_add_test_executable(kue-player-action-queue-tests tests/PlayerActionQueueTests.cpp)
   target_link_libraries(kue-player-action-queue-tests PRIVATE Threads::Threads)
-  set_target_properties(kue-player-action-queue-tests PROPERTIES
-    INTERPROCEDURAL_OPTIMIZATION_RELEASE TRUE
-    NO_SYSTEM_FROM_IMPORTED TRUE
-  )
   add_test(NAME kue-player-action-queue COMMAND kue-player-action-queue-tests)
 
-  add_executable(kue-player-action-validation-tests tests/PlayerActionValidationTests.cpp)
-  target_include_directories(kue-player-action-validation-tests PRIVATE src)
-  target_compile_options(kue-player-action-validation-tests PRIVATE ${KUE_STRICT_COMPILE_OPTIONS})
-  set_target_properties(kue-player-action-validation-tests PROPERTIES
-    INTERPROCEDURAL_OPTIMIZATION_RELEASE TRUE
-    NO_SYSTEM_FROM_IMPORTED TRUE
-  )
+  kue_add_test_executable(kue-player-action-validation-tests tests/PlayerActionValidationTests.cpp)
   add_test(NAME kue-player-action-validation COMMAND kue-player-action-validation-tests)
 
-  add_executable(kue-player-snapshot-tests tests/PlayerSnapshotTests.cpp)
-  target_include_directories(kue-player-snapshot-tests PRIVATE src)
-  target_compile_options(kue-player-snapshot-tests PRIVATE ${KUE_STRICT_COMPILE_OPTIONS})
-  set_target_properties(kue-player-snapshot-tests PROPERTIES
-    INTERPROCEDURAL_OPTIMIZATION_RELEASE TRUE
-    NO_SYSTEM_FROM_IMPORTED TRUE
-  )
+  kue_add_test_executable(kue-player-snapshot-tests tests/PlayerSnapshotTests.cpp)
   add_test(NAME kue-player-snapshot COMMAND kue-player-snapshot-tests)
 
-  add_executable(kue-utf8-tests tests/Utf8Tests.cpp)
-  target_include_directories(kue-utf8-tests PRIVATE src)
-  target_compile_options(kue-utf8-tests PRIVATE ${KUE_STRICT_COMPILE_OPTIONS})
-  set_target_properties(kue-utf8-tests PROPERTIES
-    INTERPROCEDURAL_OPTIMIZATION_RELEASE TRUE
-    NO_SYSTEM_FROM_IMPORTED TRUE
-  )
+  kue_add_test_executable(kue-utf8-tests tests/Utf8Tests.cpp)
   add_test(NAME kue-utf8 COMMAND kue-utf8-tests)
 
-  add_executable(kue-lethal-state-lifecycle-tests
-    tests/LethalStateLifecycleTests.cpp
-    src/game/LethalState.cpp
-  )
-  target_include_directories(kue-lethal-state-lifecycle-tests PRIVATE src)
-  target_compile_options(kue-lethal-state-lifecycle-tests PRIVATE ${KUE_STRICT_COMPILE_OPTIONS})
-  target_link_libraries(kue-lethal-state-lifecycle-tests PRIVATE Threads::Threads ${CMAKE_DL_LIBS})
-  set_target_properties(kue-lethal-state-lifecycle-tests PROPERTIES
-    INTERPROCEDURAL_OPTIMIZATION_RELEASE TRUE
-    NO_SYSTEM_FROM_IMPORTED TRUE
-  )
-  add_test(NAME kue-lethal-state-lifecycle COMMAND kue-lethal-state-lifecycle-tests)
-
-  add_executable(kue-main-boot-tests tests/MainBootTests.cpp src/main.cpp)
-  target_sources(kue-main-boot-tests PRIVATE $<TARGET_OBJECTS:kue-build-identity>)
-  target_include_directories(kue-main-boot-tests PRIVATE src)
-  target_compile_options(kue-main-boot-tests PRIVATE ${KUE_STRICT_COMPILE_OPTIONS})
-  target_link_libraries(kue-main-boot-tests PRIVATE Threads::Threads)
-  set_target_properties(kue-main-boot-tests PROPERTIES
-    INTERPROCEDURAL_OPTIMIZATION_RELEASE TRUE
-    NO_SYSTEM_FROM_IMPORTED TRUE
-  )
-  add_test(NAME kue-main-boot COMMAND kue-main-boot-tests)
-
-  add_executable(kue-metadata-cache-tests
+  kue_add_test_executable(kue-metadata-cache-tests
     tests/MetadataCacheTests.cpp
     src/mono/UnityMetadata.cpp
   )
-  target_include_directories(kue-metadata-cache-tests PRIVATE src)
-  target_compile_options(kue-metadata-cache-tests PRIVATE ${KUE_STRICT_COMPILE_OPTIONS})
   target_link_libraries(kue-metadata-cache-tests PRIVATE Threads::Threads)
-  set_target_properties(kue-metadata-cache-tests PROPERTIES
-    INTERPROCEDURAL_OPTIMIZATION_RELEASE TRUE
-    NO_SYSTEM_FROM_IMPORTED TRUE
-  )
   add_test(NAME kue-metadata-cache COMMAND kue-metadata-cache-tests)
 
-  add_executable(kue-runtime-catalog-tests
+  kue_add_test_executable(kue-runtime-catalog-tests
     tests/RuntimeCatalogTests.cpp
     src/game/RuntimeCatalog.cpp
   )
-  target_include_directories(kue-runtime-catalog-tests PRIVATE src)
-  target_compile_options(kue-runtime-catalog-tests PRIVATE ${KUE_STRICT_COMPILE_OPTIONS})
-  set_target_properties(kue-runtime-catalog-tests PROPERTIES
-    INTERPROCEDURAL_OPTIMIZATION_RELEASE TRUE
-    NO_SYSTEM_FROM_IMPORTED TRUE
-  )
   add_test(NAME kue-runtime-catalog COMMAND kue-runtime-catalog-tests)
 
-  add_library(kue-module-entry-fixture MODULE
-    src/entry/module.cpp
-    tests/ModuleEntryFixture.cpp
-  )
-  target_include_directories(kue-module-entry-fixture PRIVATE src)
-  target_compile_options(kue-module-entry-fixture PRIVATE ${KUE_STRICT_COMPILE_OPTIONS})
-  set_target_properties(kue-module-entry-fixture PROPERTIES
-    INTERPROCEDURAL_OPTIMIZATION_RELEASE TRUE
-    NO_SYSTEM_FROM_IMPORTED TRUE
-    PREFIX ""
-  )
+  kue_add_test_executable(kue-platform-tests tests/PlatformTests.cpp)
+  target_link_libraries(kue-platform-tests PRIVATE kue-platform)
+  add_test(NAME kue-platform COMMAND kue-platform-tests)
 
-  add_executable(kue-module-entry-tests tests/ModuleEntryTests.cpp)
-  target_include_directories(kue-module-entry-tests PRIVATE src)
-  target_compile_options(kue-module-entry-tests PRIVATE ${KUE_STRICT_COMPILE_OPTIONS})
-  target_link_libraries(kue-module-entry-tests PRIVATE ${CMAKE_DL_LIBS})
-  set_target_properties(kue-module-entry-tests PROPERTIES
-    ENABLE_EXPORTS TRUE
-    INTERPROCEDURAL_OPTIMIZATION_RELEASE TRUE
-    NO_SYSTEM_FROM_IMPORTED TRUE
-  )
-  add_test(
-    NAME kue-module-entry
-    COMMAND kue-module-entry-tests $<TARGET_FILE:kue-module-entry-fixture>
-  )
+  function(kue_add_module_fixture KUE_FIXTURE_TARGET)
+    add_library(${KUE_FIXTURE_TARGET} MODULE ${ARGN})
+    target_include_directories(${KUE_FIXTURE_TARGET} PRIVATE src)
+    target_compile_options(${KUE_FIXTURE_TARGET} PRIVATE ${KUE_STRICT_COMPILE_OPTIONS})
+    target_link_libraries(${KUE_FIXTURE_TARGET} PRIVATE kue-platform)
+    set_target_properties(${KUE_FIXTURE_TARGET} PROPERTIES
+      INTERPROCEDURAL_OPTIMIZATION_RELEASE TRUE
+      NO_SYSTEM_FROM_IMPORTED TRUE
+      PREFIX ""
+    )
+  endfunction()
 
-  add_test(
-    NAME kue-scripts
-    COMMAND "${CMAKE_COMMAND}" -E env "CXX=${CMAKE_CXX_COMPILER}"
-            "${KUE_BASH_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tests/ScriptTests.sh"
-  )
-  add_test(
-    NAME kue-build-identity
-    COMMAND "${CMAKE_COMMAND}" -E env "CXX=${CMAKE_CXX_COMPILER}"
-            "${KUE_BASH_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tests/ScriptTests.sh" build-identity
-  )
-  add_test(
-    NAME kue-inject-environment
-    COMMAND "${CMAKE_COMMAND}" -E env "CXX=${CMAKE_CXX_COMPILER}"
-            "${KUE_BASH_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tests/ScriptTests.sh" inject-environment
-  )
-  set_tests_properties(kue-inject-environment PROPERTIES TIMEOUT 10)
+  if(WIN32)
+    kue_add_module_fixture(kue-remote-start-failure-module
+      src/entry/module.cpp
+      src/core/Log.cpp
+      tests/RemoteStartFailureFixture.cpp
+    )
+    target_sources(kue-remote-start-failure-module PRIVATE $<TARGET_OBJECTS:kue-build-identity>)
+    kue_add_test_executable(kue-remote-start-fixture tests/RemoteStartFixture.cpp)
+    target_link_libraries(kue-remote-start-fixture PRIVATE kue-platform)
+
+    kue_add_test_executable(kue-injector-tests tests/InjectorTests.cpp)
+    target_link_libraries(kue-injector-tests PRIVATE kue-platform)
+    add_test(
+      NAME kue-injector
+      COMMAND kue-injector-tests
+              $<TARGET_FILE:kue-inject>
+              $<TARGET_FILE:kue-remote-start-fixture>
+              $<TARGET_FILE:kue-remote-start-failure-module>
+    )
+    set_tests_properties(kue-injector PROPERTIES TIMEOUT 120)
+  else()
+    kue_add_module_fixture(kue-module-entry-fixture
+      src/entry/module.cpp
+      tests/ModuleEntryFixture.cpp
+    )
+
+    kue_add_test_executable(kue-config-tests tests/ConfigTests.cpp src/core/Config.cpp)
+    target_link_libraries(kue-config-tests PRIVATE nlohmann_json::nlohmann_json kue-platform)
+    add_test(NAME kue-config COMMAND kue-config-tests)
+
+    kue_add_test_executable(kue-log-tests tests/LogTests.cpp src/core/Log.cpp)
+    target_link_libraries(kue-log-tests PRIVATE Threads::Threads kue-platform)
+    add_test(NAME kue-log COMMAND kue-log-tests)
+
+    kue_add_test_executable(kue-lethal-state-lifecycle-tests
+      tests/LethalStateLifecycleTests.cpp
+      src/game/LethalState.cpp
+    )
+    target_link_libraries(kue-lethal-state-lifecycle-tests PRIVATE Threads::Threads kue-platform)
+    add_test(NAME kue-lethal-state-lifecycle COMMAND kue-lethal-state-lifecycle-tests)
+
+    kue_add_test_executable(kue-main-boot-tests tests/MainBootTests.cpp src/main.cpp)
+    target_sources(kue-main-boot-tests PRIVATE $<TARGET_OBJECTS:kue-build-identity>)
+    target_link_libraries(kue-main-boot-tests PRIVATE Threads::Threads kue-platform)
+    add_test(NAME kue-main-boot COMMAND kue-main-boot-tests)
+
+    kue_add_test_executable(kue-module-entry-tests tests/ModuleEntryTests.cpp)
+    target_link_libraries(kue-module-entry-tests PRIVATE ${CMAKE_DL_LIBS})
+    set_target_properties(kue-module-entry-tests PROPERTIES ENABLE_EXPORTS TRUE)
+    add_test(
+      NAME kue-module-entry
+      COMMAND kue-module-entry-tests $<TARGET_FILE:kue-module-entry-fixture>
+    )
+
+    add_test(
+      NAME kue-scripts
+      COMMAND "${CMAKE_COMMAND}" -E env "CXX=${CMAKE_CXX_COMPILER}"
+              "${KUE_BASH_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tests/ScriptTests.sh"
+    )
+    add_test(
+      NAME kue-build-identity
+      COMMAND "${CMAKE_COMMAND}" -E env "CXX=${CMAKE_CXX_COMPILER}"
+              "${KUE_BASH_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tests/ScriptTests.sh" build-identity
+    )
+    add_test(
+      NAME kue-inject-environment
+      COMMAND "${CMAKE_COMMAND}" -E env "CXX=${CMAKE_CXX_COMPILER}"
+              "${KUE_BASH_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tests/ScriptTests.sh" inject-environment
+    )
+    set_tests_properties(kue-inject-environment PROPERTIES TIMEOUT 10)
+  endif()
 
   if(KUE_BUILD_MODULE)
-    add_executable(kue-internal-hud-renderer-tests
+    kue_add_test_executable(kue-internal-hud-renderer-tests
       tests/InternalHudRendererTests.cpp
       src/core/Config.cpp
       src/game/RuntimeCatalog.cpp
@@ -721,36 +832,27 @@ if(BUILD_TESTING)
       src/overlay/Menu.cpp
       src/overlay/Theme.cpp
     )
-    target_include_directories(kue-internal-hud-renderer-tests PRIVATE src)
-    target_compile_options(kue-internal-hud-renderer-tests PRIVATE ${KUE_STRICT_COMPILE_OPTIONS})
     target_link_libraries(kue-internal-hud-renderer-tests PRIVATE
       imgui
       nlohmann_json::nlohmann_json
       Threads::Threads
-    )
-    set_target_properties(kue-internal-hud-renderer-tests PROPERTIES
-      INTERPROCEDURAL_OPTIMIZATION_RELEASE TRUE
-      NO_SYSTEM_FROM_IMPORTED TRUE
+      kue-platform
     )
     add_test(NAME kue-internal-hud-renderer COMMAND kue-internal-hud-renderer-tests)
 
-    add_executable(kue-mono-runtime-tests
-      tests/MonoRuntimeTests.cpp
-      src/core/Log.cpp
-      src/mono/Runtime.cpp
-    )
-    target_include_directories(kue-mono-runtime-tests PRIVATE src)
-    target_compile_options(kue-mono-runtime-tests PRIVATE ${KUE_STRICT_COMPILE_OPTIONS})
-    target_link_libraries(kue-mono-runtime-tests PRIVATE
-      PkgConfig::CAPSTONE
-      Threads::Threads
-      ${CMAKE_DL_LIBS}
-    )
-    set_target_properties(kue-mono-runtime-tests PROPERTIES
-      ENABLE_EXPORTS TRUE
-      INTERPROCEDURAL_OPTIMIZATION_RELEASE TRUE
-      NO_SYSTEM_FROM_IMPORTED TRUE
-    )
-    add_test(NAME kue-mono-runtime COMMAND kue-mono-runtime-tests)
+    if(NOT WIN32)
+      kue_add_test_executable(kue-mono-runtime-tests
+        tests/MonoRuntimeTests.cpp
+        src/core/Log.cpp
+        src/mono/Runtime.cpp
+      )
+      target_link_libraries(kue-mono-runtime-tests PRIVATE
+        ${KUE_CAPSTONE_TARGET}
+        Threads::Threads
+        kue-platform
+      )
+      set_target_properties(kue-mono-runtime-tests PROPERTIES ENABLE_EXPORTS TRUE)
+      add_test(NAME kue-mono-runtime COMMAND kue-mono-runtime-tests)
+    endif()
   endif()
 endif()

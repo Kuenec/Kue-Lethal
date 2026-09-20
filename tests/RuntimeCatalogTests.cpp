@@ -1,4 +1,6 @@
 #include "game/PlayerActions.h"
+
+#include "AlignedAllocation.h"
 #include "game/RuntimeCatalog.h"
 
 #include <array>
@@ -59,8 +61,7 @@ struct AlignedAllocationRequest {
 
 void* allocateAligned(AlignedAllocationRequest request) {
     recordAllocation();
-    void* memory = nullptr;
-    if (posix_memalign(&memory, request.alignment, request.size == 0 ? 1 : request.size) == 0)
+    if (void* memory = kue::tests::allocateAligned(request.size, request.alignment))
         return memory;
     throw std::bad_alloc();
 }
@@ -770,19 +771,19 @@ void* operator new[](std::size_t size, std::align_val_t alignment) {
 }
 
 void operator delete(void* memory, std::align_val_t) noexcept {
-    std::free(memory);
+    kue::tests::releaseAligned(memory);
 }
 
 void operator delete[](void* memory, std::align_val_t) noexcept {
-    std::free(memory);
+    kue::tests::releaseAligned(memory);
 }
 
 void operator delete(void* memory, std::size_t, std::align_val_t) noexcept {
-    std::free(memory);
+    kue::tests::releaseAligned(memory);
 }
 
 void operator delete[](void* memory, std::size_t, std::align_val_t) noexcept {
-    std::free(memory);
+    kue::tests::releaseAligned(memory);
 }
 
 int main() {

@@ -503,6 +503,8 @@ void Interface::drawSelfTab(const MenuSnapshot& snapshot, MenuConfiguration& con
     sectionLabel("ACTIONS");
     if (actionButton(snapshot.flyEnabled ? "Disable Fly" : "Enable Fly", -1.f))
         queueAction({PlayerAction::ToggleFly, NoPlayerActionPayload{}});
+    if (actionButton("Toggle Third Person", -1.f))
+        queueAction({PlayerAction::ToggleThirdPerson, NoPlayerActionPayload{}});
     if (actionButton("Kill Yourself", -1.f)) {
         std::optional<std::uint64_t> selfClientId;
         for (const PlayerSnapshotPlayer& player : snapshot.playerFrame.players) {
@@ -748,6 +750,17 @@ void Interface::drawItemsTab(const MenuSnapshot& snapshot, const RuntimeCatalogs
             queueAction(
                 {PlayerAction::TeleportItemsToPlayer, PlayerTargetPayload{selected.clientId}});
         }
+        sectionLabel("COMPANY");
+        if (actionButton("Deposit All Ship Scrap On The Company Desk", -1.f))
+            queueAction({PlayerAction::DepositShipScrap, NoPlayerActionPayload{}});
+        sectionLabel("HOST ONLY - TERMINAL CREDITS");
+        ImGui::BeginDisabled(!snapshot.localIsHost);
+        ImGui::SetNextItemWidth(-1.f);
+        boundedSlider("##credit_amount", mCreditAmount,
+                      {.minimum = 1, .maximum = kMaximumTerminalCreditsPerAction}, "Credits %d");
+        if (actionButton("Add Credits To Terminal", -1.f))
+            queueAction({PlayerAction::AddTerminalCredits, TerminalCreditsPayload{mCreditAmount}});
+        ImGui::EndDisabled();
     } else {
         ImGui::TextColored(ImVec4(0.48f, 0.48f, 0.52f, 1.f), "No real player available");
     }

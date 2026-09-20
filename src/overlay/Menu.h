@@ -90,6 +90,7 @@ class Interface {
     std::size_t mSelectedItemPlayer = 0;
     int mItemSpawnCount = 1;
     int mEnemySpawnCount = 1;
+    int mCreditAmount = 1000;
     bool mSpawnOutside = false;
     float mPjSpamSpeed = 0.5f;
     bool mConfigurationChanged = false;

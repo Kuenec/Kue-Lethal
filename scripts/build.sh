@@ -31,11 +31,20 @@ done
 
 validate_text "$project_root" 4096 "project root"
 
+if [[ -v TARGET && "$TARGET" != "linux" && "$TARGET" != "windows" ]]; then
+    printf 'error: TARGET must be linux or windows, got: %s\n' "$TARGET" >&2
+    exit 1
+fi
+target="${TARGET-linux}"
 if [[ -v BUILD_DIR && -z "$BUILD_DIR" ]]; then
     printf '%s\n' 'error: BUILD_DIR is set but empty' >&2
     exit 1
 fi
-build_directory="${BUILD_DIR-$project_root/build}"
+if [[ "$target" == "windows" ]]; then
+    build_directory="${BUILD_DIR-$project_root/build-windows}"
+else
+    build_directory="${BUILD_DIR-$project_root/build}"
+fi
 validate_text "$build_directory" 4096 "build directory"
 if ! mkdir -p -- "$build_directory"; then
     printf 'error: cannot create build directory: %s\n' "$build_directory" >&2
@@ -64,17 +73,27 @@ if [[ -v JOBS ]]; then
     fi
 fi
 
-cmake -S "$project_root" -B "$build_directory" -DCMAKE_BUILD_TYPE=Release \
-    -DKUE_BUILD_MODULE=ON
+configure_arguments=(-DCMAKE_BUILD_TYPE=Release -DKUE_BUILD_MODULE=ON)
+build_targets=(kuelethal)
+artifacts=("$build_directory/kuelethal.so")
+if [[ "$target" == "windows" ]]; then
+    configure_arguments+=(
+        "-DCMAKE_TOOLCHAIN_FILE=$project_root/cmake/MinGWx86_64.cmake"
+    )
+    build_targets=(kuelethal kue-inject)
+    artifacts=("$build_directory/kuelethal.dll" "$build_directory/kue-inject.exe")
+fi
+cmake -S "$project_root" -B "$build_directory" "${configure_arguments[@]}"
 if [[ -v JOBS ]]; then
-    cmake --build "$build_directory" --target kuelethal --parallel "$JOBS"
+    cmake --build "$build_directory" --target "${build_targets[@]}" --parallel "$JOBS"
 else
-    cmake --build "$build_directory" --target kuelethal --parallel
+    cmake --build "$build_directory" --target "${build_targets[@]}" --parallel
 fi
 
-module="$build_directory/kuelethal.so"
-if [[ ! -f "$module" || ! -s "$module" ]]; then
-    printf 'error: build did not produce a nonempty module: %s\n' "$module" >&2
-    exit 1
-fi
-printf '[kue] release build complete: %s\n' "$module"
+for artifact in "${artifacts[@]}"; do
+    if [[ ! -f "$artifact" || ! -s "$artifact" ]]; then
+        printf 'error: build did not produce a nonempty artifact: %s\n' "$artifact" >&2
+        exit 1
+    fi
+done
+printf '[kue] release build complete: %s\n' "${artifacts[@]}"

@@ -1,5 +1,7 @@
 #include "core/Utf8.h"
 
+#include "AlignedAllocation.h"
+
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -70,21 +72,24 @@ void* allocateNoThrow(std::size_t size) noexcept {
 
 void* allocateAligned(std::size_t size, std::size_t alignment) {
     recordAllocation();
-    void* memory = nullptr;
-    if (posix_memalign(&memory, alignment, size == 0 ? 1 : size) == 0)
+    if (void* memory = kue::tests::allocateAligned(size, alignment))
         return memory;
     throw std::bad_alloc();
 }
 
 void* allocateAlignedNoThrow(std::size_t size, std::size_t alignment) noexcept {
     recordAllocation();
-    void* memory = nullptr;
-    return posix_memalign(&memory, alignment, size == 0 ? 1 : size) == 0 ? memory : nullptr;
+    return kue::tests::allocateAligned(size, alignment);
 }
 
 void release(void* memory) noexcept {
     recordDeallocation();
     std::free(memory);
+}
+
+void releaseAligned(void* memory) noexcept {
+    recordDeallocation();
+    kue::tests::releaseAligned(memory);
 }
 
 void expectConverted(TestRun& run, kue::Utf16Input input, std::string_view expected) {
@@ -409,27 +414,27 @@ void operator delete[](void* memory, const std::nothrow_t&) noexcept {
 }
 
 void operator delete(void* memory, std::align_val_t) noexcept {
-    release(memory);
+    releaseAligned(memory);
 }
 
 void operator delete[](void* memory, std::align_val_t) noexcept {
-    release(memory);
+    releaseAligned(memory);
 }
 
 void operator delete(void* memory, std::size_t, std::align_val_t) noexcept {
-    release(memory);
+    releaseAligned(memory);
 }
 
 void operator delete[](void* memory, std::size_t, std::align_val_t) noexcept {
-    release(memory);
+    releaseAligned(memory);
 }
 
 void operator delete(void* memory, std::align_val_t, const std::nothrow_t&) noexcept {
-    release(memory);
+    releaseAligned(memory);
 }
 
 void operator delete[](void* memory, std::align_val_t, const std::nothrow_t&) noexcept {
-    release(memory);
+    releaseAligned(memory);
 }
 
 int main(int argc, char** argv) {

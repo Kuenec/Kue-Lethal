@@ -19,3 +19,11 @@ if(KUE_BUILD_MODULE)
   )
   FetchContent_MakeAvailable(imgui_source)
 endif()
+
+if(KUE_BUILD_MODULE AND WIN32)
+  FetchContent_Declare(capstone_source
+    URL https://github.com/capstone-engine/capstone/archive/refs/tags/5.0.9.tar.gz
+    URL_HASH SHA256=0619da31af08152600af95c481527ef6d756c0a8404fca7544a4fdf6dfc2c0f9
+  )
+  FetchContent_Populate(capstone_source)
+endif()

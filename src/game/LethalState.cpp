@@ -3,12 +3,13 @@
 #include "core/Log.h"
 #include "mono/UnityMetadata.h"
 #include "overlay/InternalHud.h"
+#include "platform/Environment.h"
+#include "platform/FileSystem.h"
+#include "platform/Process.h"
 
 #include <array>
 #include <chrono>
 #include <cstdio>
-#include <cstdlib>
-#include <dlfcn.h>
 #include <exception>
 #include <string>
 #include <string_view>
@@ -36,18 +37,25 @@ constexpr std::uint8_t nextStatusWait(std::uint8_t current) noexcept {
 static_assert(nextStatusWait(0) == 1 && nextStatusWait(kStatusLogPeriod - 1U) == 0);
 
 std::string internalHudPath() {
-    if (const char* overridePath = std::getenv("KUE_INTERNAL_HUD")) {
-        if (*overridePath)
-            return overridePath;
-    }
-    Dl_info info{};
-    if (!dladdr(reinterpret_cast<void*>(&internalHudPath), &info) || !info.dli_fname)
+    platform::EnvironmentStorage overrideStorage;
+    const platform::EnvironmentValue overridePath =
+        platform::readEnvironment("KUE_INTERNAL_HUD", overrideStorage);
+    if (overridePath.status == platform::EnvironmentStatus::Valid)
+        return std::string(overridePath.text);
+    std::array<char, platform::kMaximumPathBytes + 1> directoryStorage{};
+    const platform::ModuleDirectory directory = platform::currentModuleDirectory(directoryStorage);
+    if (!directory.available)
         return {};
-    std::string modulePath(info.dli_fname);
-    const std::string::size_type slash = modulePath.find_last_of('/');
-    if (slash == std::string::npos)
-        return "managed/KueInternalHud.dll";
-    return modulePath.substr(0, slash) + "/managed/KueInternalHud.dll";
+    std::string hudPath;
+    hudPath.reserve(directory.path.size() + 32);
+    if (!directory.path.empty()) {
+        hudPath.append(directory.path);
+        hudPath.push_back(platform::kPathSeparator);
+    }
+    hudPath.append("managed");
+    hudPath.push_back(platform::kPathSeparator);
+    hudPath.append("KueInternalHud.dll");
+    return hudPath;
 }
 
 void reportWorkerFailure(const char* detail) noexcept {

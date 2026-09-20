@@ -59,6 +59,9 @@ enum class PlayerAction : std::uint8_t {
     SummonEnemyTypeAtPlayer,
     ClearInsanity,
     MaxInsanity,
+    DepositShipScrap,
+    AddTerminalCredits,
+    ToggleThirdPerson,
 };
 
 enum class PlayerActionPayloadKind : std::uint8_t {
@@ -69,6 +72,7 @@ enum class PlayerActionPayloadKind : std::uint8_t {
     EnemyAtPlayer,
     ItemAtPlayer,
     PlushieInterval,
+    TerminalCredits,
 };
 
 enum class EnemySpawnArea : std::uint8_t { Inside, Outside };
@@ -102,9 +106,16 @@ struct PlushieIntervalPayload {
     std::chrono::milliseconds interval;
 };
 
+inline constexpr int kMaximumTerminalCreditsPerAction = 1000000;
+
+struct TerminalCreditsPayload {
+    int amount;
+};
+
 using PlayerActionPayload =
     std::variant<NoPlayerActionPayload, PlayerTargetPayload, EnemySpawnPayload,
-                 EnemyAtPlayerPayload, ItemAtPlayerPayload, PlushieIntervalPayload>;
+                 EnemyAtPlayerPayload, ItemAtPlayerPayload, PlushieIntervalPayload,
+                 TerminalCreditsPayload>;
 
 struct PlayerActionRequest {
     PlayerAction action = PlayerAction::None;
@@ -156,6 +167,8 @@ constexpr PlayerActionPayloadKind playerActionPayloadKind(PlayerAction action) n
         return PlayerActionPayloadKind::ItemAtPlayer;
     case PlayerAction::TogglePjManSpam:
         return PlayerActionPayloadKind::PlushieInterval;
+    case PlayerAction::AddTerminalCredits:
+        return PlayerActionPayloadKind::TerminalCredits;
     case PlayerAction::KillAll:
     case PlayerAction::KillAllExceptLocal:
     case PlayerAction::KillAllEnemies:
@@ -186,6 +199,8 @@ constexpr PlayerActionPayloadKind playerActionPayloadKind(PlayerAction action) n
     case PlayerAction::ToggleTerminalSound:
     case PlayerAction::ToggleDepositDeskSound:
     case PlayerAction::ToggleCarHorn:
+    case PlayerAction::DepositShipScrap:
+    case PlayerAction::ToggleThirdPerson:
         return PlayerActionPayloadKind::None;
     }
     return PlayerActionPayloadKind::Invalid;
@@ -206,6 +221,8 @@ playerActionPayloadKind(const PlayerActionPayload& payload) noexcept {
         return PlayerActionPayloadKind::ItemAtPlayer;
     case 5:
         return PlayerActionPayloadKind::PlushieInterval;
+    case 6:
+        return PlayerActionPayloadKind::TerminalCredits;
     default:
         return PlayerActionPayloadKind::Invalid;
     }
@@ -237,6 +254,9 @@ validatePlayerActionRequest(const PlayerActionRequest& request) noexcept {
     if (const auto* payload = std::get_if<PlushieIntervalPayload>(&request.payload);
         payload && (payload->interval < std::chrono::milliseconds{0} ||
                     payload->interval > std::chrono::seconds{1}))
+        return PlayerActionValidation::InvalidPayload;
+    if (const auto* payload = std::get_if<TerminalCreditsPayload>(&request.payload);
+        payload && (payload->amount <= 0 || payload->amount > kMaximumTerminalCreditsPerAction))
         return PlayerActionValidation::InvalidPayload;
     return PlayerActionValidation::Valid;
 }

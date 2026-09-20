@@ -1,21 +1,20 @@
 #include "core/Config.h"
 
 #include "core/Utf8.h"
+#include "platform/Environment.h"
+#include "platform/FileSystem.h"
 
 #include <array>
 #include <cerrno>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
-#include <cstdlib>
 #include <cstring>
-#include <fcntl.h>
 #include <filesystem>
 #include <limits>
 #include <nlohmann/json.hpp>
+#include <span>
 #include <string_view>
-#include <sys/stat.h>
-#include <unistd.h>
 #include <utility>
 
 namespace kue {
@@ -25,10 +24,14 @@ using json = nlohmann::json;
 namespace {
 
 constexpr std::size_t kMaximumConfigBytes = 65536;
-constexpr std::size_t kMaximumPathBytes = 4096;
+constexpr std::size_t kMaximumPathBytes = platform::kMaximumPathBytes;
 constexpr std::string_view kTemporaryPathSuffix = ".tmp.XXXXXX";
 constexpr std::size_t kMaximumTemporaryPathBytes = kMaximumPathBytes + kTemporaryPathSuffix.size();
-constexpr std::string_view kDefaultConfigSuffix = "/.config/kuelethal/config.json";
+static_assert(kMaximumTemporaryPathBytes == platform::kMaximumTemporaryPathBytes);
+static_assert(kMaximumPathBytes == platform::kMaximumEnvironmentValueBytes);
+constexpr std::string_view kDefaultConfigSuffix = platform::kUserConfigurationLocation.suffix;
+constexpr const char* kUserConfigurationVariable =
+    platform::kUserConfigurationLocation.variableName;
 constexpr std::size_t kMaximumJsonContainers = 4;
 constexpr std::size_t kMaximumJsonObjectKeys = 20;
 constexpr std::size_t kMaximumJsonKeyBytes = 64;
@@ -471,7 +474,7 @@ class ConfigInput final {
 
     ~ConfigInput() {
         if (mDescriptor >= 0)
-            static_cast<void>(::close(mDescriptor));
+            static_cast<void>(platform::closeDescriptor(mDescriptor));
     }
 
     ConfigInput(const ConfigInput&) = delete;
@@ -480,11 +483,9 @@ class ConfigInput final {
     [[nodiscard]] int descriptor() const noexcept { return mDescriptor; }
 
     [[nodiscard]] bool close(int& errorCode) noexcept {
-        errno = 0;
-        const int result = ::close(mDescriptor);
-        errorCode = result == 0 ? 0 : (errno != 0 ? errno : EIO);
+        errorCode = platform::closeDescriptor(mDescriptor);
         mDescriptor = -1;
-        return result == 0;
+        return errorCode == 0;
     }
 
   private:
@@ -501,8 +502,19 @@ bool validatePathText(PathTextValidation input, std::string& error) {
     return true;
 }
 
-std::string_view boundedPathView(const char* path) noexcept {
-    return {path, ::strnlen(path, kMaximumPathBytes + 1)};
+bool validateEnvironmentValue(const platform::EnvironmentValue& value, std::string_view name,
+                              std::string& error) {
+    switch (value.status) {
+    case platform::EnvironmentStatus::Valid:
+    case platform::EnvironmentStatus::Unset:
+    case platform::EnvironmentStatus::Empty:
+        return true;
+    case platform::EnvironmentStatus::TooLong:
+        return fail(error, std::string(name) + " exceeds the path-length limit");
+    case platform::EnvironmentStatus::InvalidEncoding:
+        return fail(error, std::string(name) + " must be valid UTF-8");
+    }
+    return fail(error, std::string(name) + " is invalid");
 }
 
 std::string operatingSystemError(std::string_view operation, int code) {
@@ -538,35 +550,50 @@ bool rejectUnknownKeys(const json& object, const std::array<std::string_view, Co
     return true;
 }
 
-ConfigSaveResult synchronizeDirectoryEntry(ConfigFileOperation operation) {
-    const std::string& path = operation.path;
-    std::string& error = operation.error;
-    std::filesystem::path directory = std::filesystem::path(path).parent_path();
-    if (directory.empty())
-        directory = ".";
-    errno = 0;
-    const int descriptor = ::open(directory.c_str(), O_RDONLY | O_CLOEXEC | O_DIRECTORY);
-    if (descriptor < 0) {
-        fail(error, operatingSystemError("cannot open configuration directory", errno));
-        return ConfigSaveResult::CommittedDurabilityUnconfirmed;
+std::string_view replacementOperationName(platform::ReplacementOperation operation) noexcept {
+    switch (operation) {
+    case platform::ReplacementOperation::Rename:
+        return "cannot replace configuration";
+    case platform::ReplacementOperation::OpenDirectory:
+        return "cannot open configuration directory";
+    case platform::ReplacementOperation::SynchronizeDirectory:
+        return "cannot synchronize configuration directory";
+    case platform::ReplacementOperation::CloseDirectory:
+        return "cannot close configuration directory";
+    case platform::ReplacementOperation::None:
+        break;
     }
-    errno = 0;
-    const int synchronizeResult = ::fsync(descriptor);
-    const int synchronizeCode = synchronizeResult != 0 ? (errno != 0 ? errno : EIO) : 0;
-    errno = 0;
-    const int closeResult = ::close(descriptor);
-    const int closeCode = closeResult != 0 ? (errno != 0 ? errno : EIO) : 0;
-    if (synchronizeResult != 0) {
-        std::string message =
-            operatingSystemError("cannot synchronize configuration directory", synchronizeCode);
-        if (closeResult != 0)
-            appendOperatingSystemError(message, "cannot close configuration directory", closeCode);
+    return "configuration replacement failed";
+}
+
+ConfigSaveResult commitReplacement(const char* temporaryPath, const std::string& path,
+                                   std::string& error) {
+    const platform::ReplacementResult replacement =
+        platform::replaceFile(temporaryPath, path.c_str());
+    if (replacement.status == platform::ReplacementStatus::Durable)
+        return ConfigSaveResult::Durable;
+    std::string message = operatingSystemError(
+        replacementOperationName(replacement.primary.operation), replacement.primary.errorCode);
+    if (replacement.secondary.operation != platform::ReplacementOperation::None) {
+        appendOperatingSystemError(message,
+                                   replacementOperationName(replacement.secondary.operation),
+                                   replacement.secondary.errorCode);
+    }
+    switch (replacement.status) {
+    case platform::ReplacementStatus::NotCommitted:
+        if (const int removeCode = platform::removeFile(temporaryPath); removeCode != 0)
+            appendOperatingSystemError(message, "cannot remove temporary configuration",
+                                       removeCode);
+        fail(error, std::move(message));
+        return ConfigSaveResult::NotCommitted;
+    case platform::ReplacementStatus::CommittedDurabilityUnconfirmed:
         fail(error, std::move(message));
         return ConfigSaveResult::CommittedDurabilityUnconfirmed;
-    }
-    if (closeResult != 0) {
-        fail(error, operatingSystemError("cannot close configuration directory", closeCode));
+    case platform::ReplacementStatus::CommittedCleanupFailed:
+        fail(error, std::move(message));
         return ConfigSaveResult::CommittedCleanupFailed;
+    case platform::ReplacementStatus::Durable:
+        break;
     }
     return ConfigSaveResult::Durable;
 }
@@ -592,32 +619,33 @@ ConfigPathSelection selectConfigPath(const std::string& userPath) {
         return ConfigPathSelection{
             .status = ConfigPathStatus::Selected, .path = userPath, .error = {}};
     }
-    const char* const environmentPath = ::getenv("KUE_CONFIG");
-    if (environmentPath) {
-        if (environmentPath[0] == '\0')
+    platform::EnvironmentStorage environmentStorage;
+    const platform::EnvironmentValue environmentPath =
+        platform::readEnvironment("KUE_CONFIG", environmentStorage);
+    if (environmentPath.status != platform::EnvironmentStatus::Unset) {
+        if (environmentPath.status == platform::EnvironmentStatus::Empty)
             return ConfigPathSelection{
                 .status = ConfigPathStatus::Failed, .path = {}, .error = "KUE_CONFIG is empty"};
-        const std::string_view selected = boundedPathView(environmentPath);
-        if (!validatePathText(PathTextValidation{.value = selected, .name = "KUE_CONFIG"},
-                              validationError)) {
+        if (!validateEnvironmentValue(environmentPath, "KUE_CONFIG", validationError)) {
             return ConfigPathSelection{.status = ConfigPathStatus::Failed,
                                        .path = {},
                                        .error = std::move(validationError)};
         }
-        return ConfigPathSelection{
-            .status = ConfigPathStatus::Selected, .path = std::string(selected), .error = {}};
+        return ConfigPathSelection{.status = ConfigPathStatus::Selected,
+                                   .path = std::string(environmentPath.text),
+                                   .error = {}};
     }
 
     std::string homePath;
-    const char* const home = ::getenv("HOME");
-    if (home && home[0] != '\0') {
-        const std::string_view homeValue = boundedPathView(home);
-        if (!validatePathText(PathTextValidation{.value = homeValue, .name = "HOME"},
-                              validationError)) {
-            return ConfigPathSelection{.status = ConfigPathStatus::Failed,
-                                       .path = {},
-                                       .error = std::move(validationError)};
-        }
+    platform::EnvironmentStorage homeStorage;
+    const platform::EnvironmentValue home =
+        platform::readEnvironment(kUserConfigurationVariable, homeStorage);
+    if (!validateEnvironmentValue(home, kUserConfigurationVariable, validationError)) {
+        return ConfigPathSelection{
+            .status = ConfigPathStatus::Failed, .path = {}, .error = std::move(validationError)};
+    }
+    if (home.status == platform::EnvironmentStatus::Valid) {
+        const std::string_view homeValue = home.text;
         if (homeValue.size() > kMaximumPathBytes - kDefaultConfigSuffix.size())
             return ConfigPathSelection{
                 .status = ConfigPathStatus::Failed,
@@ -842,39 +870,33 @@ bool configLoad(Config& cfg, ConfigFileOperation operation) {
         return false;
     }
     const std::string& found = selection.path;
-    errno = 0;
-    const int rawDescriptor = ::open(found.c_str(), O_RDONLY | O_CLOEXEC | O_NONBLOCK);
-    if (rawDescriptor < 0)
-        return fail(error,
-                    operatingSystemError("cannot open configuration '" + found + "'", errno));
-    ConfigInput input(rawDescriptor);
-    struct stat metadata{};
-    errno = 0;
-    if (::fstat(input.descriptor(), &metadata) != 0) {
-        const int code = errno != 0 ? errno : EIO;
-        return failAndClose(
-            input, error,
-            operatingSystemError("cannot inspect configuration '" + found + "'", code));
+    const platform::DescriptorResult opened = platform::openForRead(found.c_str());
+    if (opened.descriptor < 0)
+        return fail(error, operatingSystemError("cannot open configuration '" + found + "'",
+                                                opened.errorCode));
+    ConfigInput input(opened.descriptor);
+    const platform::FileInspection inspection = platform::inspectFile(input.descriptor());
+    if (!inspection.succeeded) {
+        return failAndClose(input, error,
+                            operatingSystemError("cannot inspect configuration '" + found + "'",
+                                                 inspection.errorCode));
     }
-    if (!S_ISREG(metadata.st_mode))
+    if (inspection.kind != platform::FileKind::Regular)
         return failAndClose(input, error, "configuration is not a regular file: " + found);
     std::array<char, kMaximumConfigBytes + 1> content{};
     std::size_t readBytes = 0;
     while (readBytes < content.size()) {
-        errno = 0;
-        const ssize_t result =
-            ::read(input.descriptor(), content.data() + readBytes, content.size() - readBytes);
-        if (result > 0) {
-            readBytes += static_cast<std::size_t>(result);
-            continue;
+        const platform::ReadResult result =
+            platform::readSome(input.descriptor(), std::span<char>(content.data() + readBytes,
+                                                                   content.size() - readBytes));
+        if (result.errorCode != 0) {
+            return failAndClose(input, error,
+                                operatingSystemError("cannot read configuration '" + found + "'",
+                                                     result.errorCode));
         }
-        if (result == 0)
+        if (result.bytes == 0)
             break;
-        if (result < 0 && errno == EINTR)
-            continue;
-        const int code = errno != 0 ? errno : EIO;
-        return failAndClose(
-            input, error, operatingSystemError("cannot read configuration '" + found + "'", code));
+        readBytes += result.bytes;
     }
     if (readBytes > kMaximumConfigBytes)
         return failAndClose(input, error, "configuration exceeds 65536-byte limit: " + found);
@@ -1008,44 +1030,37 @@ ConfigSaveResult configSave(const Config& cfg, ConfigFileOperation operation) {
     std::memcpy(temporaryPath.data(), path.data(), path.size());
     std::memcpy(temporaryPath.data() + path.size(), kTemporaryPathSuffix.data(),
                 kTemporaryPathSuffix.size());
-    const int descriptor = ::mkostemp(temporaryPath.data(), O_CLOEXEC);
-    if (descriptor < 0)
-        return reject(operatingSystemError("cannot create temporary configuration", errno));
-    int descriptorFlags = -1;
-    do {
-        errno = 0;
-        descriptorFlags = ::fcntl(descriptor, F_GETFD);
-    } while (descriptorFlags < 0 && errno == EINTR);
-    if (descriptorFlags < 0 || (descriptorFlags & FD_CLOEXEC) == 0) {
-        const int code = descriptorFlags < 0 ? (errno != 0 ? errno : EIO) : EIO;
+    const platform::DescriptorResult created =
+        platform::createExclusiveTemporary(temporaryPath.data());
+    if (created.descriptor < 0) {
+        return reject(
+            operatingSystemError("cannot create temporary configuration", created.errorCode));
+    }
+    const int descriptor = created.descriptor;
+    const platform::InheritanceInspection inheritance = platform::inspectInheritance(descriptor);
+    if (!inheritance.succeeded || inheritance.inheritable) {
+        const int code = inheritance.succeeded ? EIO : inheritance.errorCode;
         std::string message =
             operatingSystemError("cannot secure temporary configuration descriptor", code);
-        errno = 0;
-        if (::close(descriptor) != 0) {
-            appendOperatingSystemError(message, "cannot close temporary configuration",
-                                       errno != 0 ? errno : EIO);
-        }
-        errno = 0;
-        if (::unlink(temporaryPath.data()) != 0) {
+        if (const int closeCode = platform::closeDescriptor(descriptor); closeCode != 0)
+            appendOperatingSystemError(message, "cannot close temporary configuration", closeCode);
+        if (const int removeCode = platform::removeFile(temporaryPath.data()); removeCode != 0)
             appendOperatingSystemError(message, "cannot remove temporary configuration",
-                                       errno != 0 ? errno : EIO);
-        }
+                                       removeCode);
         return reject(std::move(message));
     }
-    FILE* output = ::fdopen(descriptor, "wb");
-    if (!output) {
-        const int code = errno;
-        std::string message = operatingSystemError("cannot open temporary configuration", code);
-        errno = 0;
-        if (::close(descriptor) != 0) {
-            appendOperatingSystemError(message, "cannot close temporary configuration", errno);
-        }
-        errno = 0;
-        if (::unlink(temporaryPath.data()) != 0) {
-            appendOperatingSystemError(message, "cannot remove temporary configuration", errno);
-        }
+    const platform::StreamResult stream = platform::associateStream(descriptor, "wb");
+    if (!stream.stream) {
+        std::string message =
+            operatingSystemError("cannot open temporary configuration", stream.errorCode);
+        if (const int closeCode = platform::closeDescriptor(descriptor); closeCode != 0)
+            appendOperatingSystemError(message, "cannot close temporary configuration", closeCode);
+        if (const int removeCode = platform::removeFile(temporaryPath.data()); removeCode != 0)
+            appendOperatingSystemError(message, "cannot remove temporary configuration",
+                                       removeCode);
         return reject(std::move(message));
     }
+    FILE* const output = stream.stream;
 
     std::string_view failedOperation;
     int failedCode = 0;
@@ -1062,10 +1077,10 @@ ConfigSaveResult configSave(const Config& cfg, ConfigFileOperation operation) {
         }
     }
     if (failedOperation.empty()) {
-        errno = 0;
-        if (::fsync(descriptor) != 0) {
+        if (const int synchronizeCode = platform::synchronizeDescriptor(descriptor);
+            synchronizeCode != 0) {
             failedOperation = "cannot synchronize temporary configuration";
-            failedCode = errno != 0 ? errno : EIO;
+            failedCode = synchronizeCode;
         }
     }
     errno = 0;
@@ -1080,22 +1095,12 @@ ConfigSaveResult configSave(const Config& cfg, ConfigFileOperation operation) {
         if (closeResult != 0 && failedOperation != "cannot close temporary configuration") {
             appendOperatingSystemError(message, "cannot close temporary configuration", closeCode);
         }
-        errno = 0;
-        if (::unlink(temporaryPath.data()) != 0) {
-            appendOperatingSystemError(message, "cannot remove temporary configuration", errno);
-        }
+        if (const int removeCode = platform::removeFile(temporaryPath.data()); removeCode != 0)
+            appendOperatingSystemError(message, "cannot remove temporary configuration",
+                                       removeCode);
         return reject(std::move(message));
     }
-    if (::rename(temporaryPath.data(), path.c_str()) != 0) {
-        const int code = errno;
-        std::string message = operatingSystemError("cannot replace configuration", code);
-        errno = 0;
-        if (::unlink(temporaryPath.data()) != 0) {
-            appendOperatingSystemError(message, "cannot remove temporary configuration", errno);
-        }
-        return reject(std::move(message));
-    }
-    return synchronizeDirectoryEntry({.path = path, .error = error});
+    return commitReplacement(temporaryPath.data(), path, error);
 }
 
 }
