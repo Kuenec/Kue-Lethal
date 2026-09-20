@@ -350,8 +350,8 @@ namespace Kue.Internal
         private bool thirdPersonEnabled;
         private PlayerControllerB thirdPersonPlayer;
         private Camera thirdPersonCamera;
-        private Vector3 thirdPersonRestorePosition;
-        private bool thirdPersonCameraMoved;
+        private Vector3 thirdPersonAppliedOffset;
+        private bool thirdPersonOffsetApplied;
         private const float ThirdPersonDistance = 4.5f;
         private const float ThirdPersonHeight = 1.1f;
         private const float ThirdPersonSide = 0.7f;
@@ -434,6 +434,7 @@ namespace Kue.Internal
         {
             RenderPipelineManager.beginCameraRendering -= OnBeginCameraRendering;
             RenderPipelineManager.endCameraRendering -= OnEndCameraRendering;
+            RestoreThirdPersonCamera();
             SetThirdPerson(false);
             ReleaseActiveInputState();
         }
@@ -463,6 +464,7 @@ namespace Kue.Internal
 
         private void Update()
         {
+            RestoreThirdPersonCamera();
             int configuredMenuKey;
             int configuredTickIntervalMs;
             int revision;
@@ -1867,6 +1869,18 @@ namespace Kue.Internal
             thirdPersonEnabled = enabled && local != null;
             if (thirdPersonEnabled)
                 thirdPersonPlayer = local;
+            else
+                RestoreThirdPersonCamera();
+        }
+
+        private void RestoreThirdPersonCamera()
+        {
+            if (!thirdPersonOffsetApplied)
+                return;
+            thirdPersonOffsetApplied = false;
+            if (thirdPersonCamera != null)
+                thirdPersonCamera.transform.position -= thirdPersonAppliedOffset;
+            thirdPersonAppliedOffset = Vector3.zero;
         }
 
         private void UpdateThirdPersonModel()
@@ -1888,7 +1902,7 @@ namespace Kue.Internal
 
         private void OnBeginCameraRendering(ScriptableRenderContext context, Camera camera)
         {
-            thirdPersonCameraMoved = false;
+            RestoreThirdPersonCamera();
             if (!thirdPersonEnabled || thirdPersonPlayer == null || camera == null ||
                 camera != thirdPersonPlayer.gameplayCamera)
                 return;
@@ -1903,17 +1917,14 @@ namespace Kue.Internal
             if (Physics.Linecast(eye, desired, out hit, mask, QueryTriggerInteraction.Ignore))
                 desired = hit.point + (eye - desired).normalized * 0.15f;
             thirdPersonCamera = camera;
-            thirdPersonRestorePosition = eye;
-            thirdPersonCameraMoved = true;
+            thirdPersonAppliedOffset = desired - eye;
+            thirdPersonOffsetApplied = true;
             view.position = desired;
         }
 
         private void OnEndCameraRendering(ScriptableRenderContext context, Camera camera)
         {
-            if (!thirdPersonCameraMoved || camera != thirdPersonCamera)
-                return;
-            thirdPersonCameraMoved = false;
-            camera.transform.position = thirdPersonRestorePosition;
+            RestoreThirdPersonCamera();
         }
 
         private static bool IsUpperArmBone(Transform bone)
