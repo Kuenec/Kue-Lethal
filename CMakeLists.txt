@@ -464,6 +464,7 @@ if(KUE_BUILD_MODULE)
     UnityEngine.UI.dll
     Unity.RenderPipelines.Core.Runtime.dll
     Unity.RenderPipelines.HighDefinition.Runtime.dll
+    UnityEngine.ImageConversionModule.dll
   )
   if(NOT KUE_GAME_MANAGED_DIR)
     message(FATAL_ERROR

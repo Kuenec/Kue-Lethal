@@ -322,20 +322,20 @@ namespace Kue.Internal
         private CustomPassVolume highlightVolume;
         private Shader highlightShader;
         private bool highlightUnavailable;
-        private int highlightPassIndex = -1;
+        private Material highlightStampMaterial;
+        private Material highlightCutoutMaterial;
         private Material highlightRingMaterial;
         private RTHandle highlightMask;
-        private RTHandle highlightBlur;
-
+        private RTHandle highlightRing;
+        private int highlightWidth;
+        private int highlightHeight;
         private Mesh highlightQuad;
         private readonly List<Vector3> highlightQuadVertices = new List<Vector3>(4);
-        private const float HighlightRingIntensity = 1.5f;
-        private const int HighlightAdditiveBlendMode = 1;
-        private const int HighlightPremultipliedBlendMode = 4;
-        private Material highlightCutoutMaterial;
+        private Vector3 highlightPixelRight;
+        private Vector3 highlightPixelUp;
         private bool highlightResourcesLogged;
-        private Material highlightStampMaterial;
-        private MaterialPropertyBlock highlightStampProperties;
+        private float highlightDumpAt = -1f;
+        private bool highlightDumped;
         private const int HighlightRingTaps = 16;
         private const float HighlightRingRadiusPixels = 3f;
         private Texture2D menuTexture;
@@ -493,18 +493,15 @@ namespace Kue.Internal
                 if (pair.Value != null)
                     Destroy(pair.Value);
             highlightMaterials.Clear();
-            if (highlightCutoutMaterial != null)
-                Destroy(highlightCutoutMaterial);
             if (highlightStampMaterial != null)
                 Destroy(highlightStampMaterial);
+            if (highlightCutoutMaterial != null)
+                Destroy(highlightCutoutMaterial);
             if (highlightRingMaterial != null)
                 Destroy(highlightRingMaterial);
             if (highlightQuad != null)
                 Destroy(highlightQuad);
-            if (highlightMask != null)
-                RTHandles.Release(highlightMask);
-            if (highlightBlur != null)
-                RTHandles.Release(highlightBlur);
+            ReleaseHighlightBuffers();
             QualitySettings.vSyncCount = capturedVSyncCount;
             Application.targetFrameRate = capturedTargetFrameRate;
         }
@@ -589,6 +586,7 @@ namespace Kue.Internal
             UpdateFlappingArms();
             UpdateThirdPersonModel();
             CollectHighlightDraws();
+            DumpHighlightBuffers();
         }
 
         private bool EnsureHighlightPass()
@@ -599,18 +597,20 @@ namespace Kue.Internal
                 return false;
             try
             {
-                highlightShader = Shader.Find("HDRP/Unlit");
+                highlightShader = Shader.Find("UI/Default");
+                if (highlightShader == null)
+                    highlightShader = Shader.Find("Sprites/Default");
                 if (highlightShader == null)
                 {
                     highlightUnavailable = true;
-                    Debug.Log("[Kue] HDRP/Unlit shader unavailable; using hull outlines");
+                    Debug.Log("[Kue] UI/Default shader unavailable; using hull outlines");
                     return false;
                 }
                 highlightVolume = gameObject.AddComponent<CustomPassVolume>();
                 highlightVolume.isGlobal = true;
                 highlightVolume.injectionPoint = CustomPassInjectionPoint.AfterPostProcess;
                 highlightVolume.customPasses.Add(new ModelHighlightPass { owner = this });
-                Debug.Log("[Kue] Model highlight pass installed");
+                Debug.Log("[Kue] Model highlight pass installed with " + highlightShader.name);
                 return true;
             }
             catch (Exception e)
@@ -632,20 +632,12 @@ namespace Kue.Internal
             Debug.LogError(reason);
         }
 
-        private Material OpaqueHighlightMaterial(Color color)
+        private Material HighlightQuadMaterial(Texture texture, Color color)
         {
             Material material = new Material(highlightShader) { hideFlags = HideFlags.HideAndDontSave };
-            HDMaterial.SetSurfaceType(material, false);
-            material.SetColor("_UnlitColor", color);
-            material.SetInt("_CullMode", (int)CullMode.Off);
-            material.SetInt("_CullModeForward", (int)CullMode.Off);
-            HDMaterial.ValidateMaterial(material);
-            material.SetInt("_ZWrite", 0);
-            material.SetInt("_ZTestDepthEqualForOpaque", (int)CompareFunction.Always);
-            material.SetInt("_ZTestTransparent", (int)CompareFunction.Always);
-            material.SetInt("_CullMode", (int)CullMode.Off);
-            material.SetInt("_CullModeForward", (int)CullMode.Off);
-            highlightPassIndex = material.FindPass("ForwardOnly");
+            material.SetColor("_Color", color);
+            if (texture != null)
+                material.SetTexture("_MainTex", texture);
             return material;
         }
 
@@ -654,38 +646,61 @@ namespace Kue.Internal
             Material material;
             if (highlightMaterials.TryGetValue(color, out material) && material != null)
                 return material;
-            material = OpaqueHighlightMaterial(new Color(color.r, color.g, color.b, 1f));
+            material = HighlightQuadMaterial(null, new Color(color.r, color.g, color.b, 1f));
             highlightMaterials[color] = material;
             return material;
         }
 
-        private bool EnsureHighlightResources()
+        private void ReleaseHighlightBuffers()
         {
-            if (highlightRingMaterial != null)
+            if (highlightMask != null)
+                RTHandles.Release(highlightMask);
+            if (highlightRing != null)
+                RTHandles.Release(highlightRing);
+            highlightMask = null;
+            highlightRing = null;
+            highlightWidth = 0;
+            highlightHeight = 0;
+        }
+
+        private static RTHandle AllocateHighlightBuffer(int width, int height, string name)
+        {
+            return RTHandles.Alloc(width, height, colorFormat: GraphicsFormat.R8G8B8A8_UNorm,
+                                   filterMode: FilterMode.Point, wrapMode: TextureWrapMode.Clamp,
+                                   name: name);
+        }
+
+        private bool EnsureHighlightResources(int width, int height)
+        {
+            if (width <= 0 || height <= 0)
+                return false;
+            if (highlightQuad == null)
+            {
+                highlightQuad = new Mesh { hideFlags = HideFlags.HideAndDontSave };
+                highlightQuad.vertices = new Vector3[4];
+                highlightQuad.uv = new[] { new Vector2(0f, 0f), new Vector2(1f, 0f),
+                                           new Vector2(1f, 1f), new Vector2(0f, 1f) };
+                highlightQuad.colors = new[] { Color.white, Color.white, Color.white, Color.white };
+                highlightQuad.triangles = new[] { 0, 2, 1, 0, 3, 2, 0, 1, 2, 0, 2, 3 };
+            }
+            if (highlightMask != null && highlightWidth == width && highlightHeight == height)
                 return true;
-            highlightMask = RTHandles.Alloc(Vector2.one, colorFormat: GraphicsFormat.R8G8B8A8_UNorm,
-                                            filterMode: FilterMode.Bilinear,
-                                            wrapMode: TextureWrapMode.Clamp,
-                                            name: "KueHighlightMask");
-            highlightBlur = RTHandles.Alloc(Vector2.one, colorFormat: GraphicsFormat.R8G8B8A8_UNorm,
-                                            filterMode: FilterMode.Bilinear,
-                                            wrapMode: TextureWrapMode.Clamp,
-                                            name: "KueHighlightBlur");
-            highlightStampMaterial =
-                ScreenQuadMaterial(highlightMask.rt, Color.white, HighlightAdditiveBlendMode);
-            highlightStampProperties = new MaterialPropertyBlock();
-            highlightCutoutMaterial = ScreenQuadMaterial(highlightMask.rt, new Color(0f, 0f, 0f, 1f),
-                                                         HighlightPremultipliedBlendMode);
-            highlightRingMaterial = ScreenQuadMaterial(
-                highlightBlur.rt,
-                new Color(HighlightRingIntensity, HighlightRingIntensity, HighlightRingIntensity, 1f),
-                HighlightAdditiveBlendMode);
-            highlightQuad = new Mesh { hideFlags = HideFlags.HideAndDontSave };
-            highlightQuad.vertices = new Vector3[4];
-            highlightQuad.uv = new[] { new Vector2(0f, 0f), new Vector2(1f, 0f), new Vector2(1f, 1f),
-                                       new Vector2(0f, 1f) };
-            highlightQuad.triangles = new[] { 0, 2, 1, 0, 3, 2, 0, 1, 2, 0, 2, 3 };
-            return highlightPassIndex >= 0;
+            ReleaseHighlightBuffers();
+            highlightMask = AllocateHighlightBuffer(width, height, "KueHighlightMask");
+            highlightRing = AllocateHighlightBuffer(width, height, "KueHighlightRing");
+            highlightWidth = width;
+            highlightHeight = height;
+            if (highlightStampMaterial != null)
+                Destroy(highlightStampMaterial);
+            if (highlightCutoutMaterial != null)
+                Destroy(highlightCutoutMaterial);
+            if (highlightRingMaterial != null)
+                Destroy(highlightRingMaterial);
+            highlightStampMaterial = HighlightQuadMaterial(highlightMask.rt, Color.white);
+            highlightCutoutMaterial =
+                HighlightQuadMaterial(highlightMask.rt, new Color(0f, 0f, 0f, 1f));
+            highlightRingMaterial = HighlightQuadMaterial(highlightRing.rt, Color.white);
+            return true;
         }
 
         private void UpdateHighlightQuad(Camera camera)
@@ -698,50 +713,25 @@ namespace Kue.Internal
             highlightQuadVertices.Add(camera.ViewportToWorldPoint(new Vector3(0f, 1f, depth)));
             highlightQuad.SetVertices(highlightQuadVertices);
             highlightQuad.RecalculateBounds();
-            Vector4 scale = RTHandles.rtHandleProperties.rtHandleScale;
-            highlightRingMaterial.SetTextureScale("_UnlitColorMap", new Vector2(scale.x, scale.y));
-            highlightCutoutMaterial.SetTextureScale("_UnlitColorMap", new Vector2(scale.x, scale.y));
-            highlightStampMaterial.SetTextureScale("_UnlitColorMap", new Vector2(scale.x, scale.y));
+            highlightPixelRight =
+                (highlightQuadVertices[1] - highlightQuadVertices[0]) / highlightWidth;
+            highlightPixelUp = (highlightQuadVertices[3] - highlightQuadVertices[0]) / highlightHeight;
         }
 
         private void StampHighlightRing(CommandBuffer cmd)
         {
-            Vector4 scale = RTHandles.rtHandleProperties.rtHandleScale;
-            Vector2Int viewport = RTHandles.rtHandleProperties.currentViewportSize;
-            float stepX = viewport.x > 0 ? scale.x / viewport.x : 0f;
-            float stepY = viewport.y > 0 ? scale.y / viewport.y : 0f;
             for (int ring = 1; ring <= 2; ring++)
             {
                 float radius = HighlightRingRadiusPixels * ring * 0.5f;
                 for (int tap = 0; tap < HighlightRingTaps; tap++)
                 {
                     float angle = tap * (Mathf.PI * 2f / HighlightRingTaps);
-                    highlightStampProperties.SetVector(
-                        "_UnlitColorMap_ST",
-                        new Vector4(scale.x, scale.y, Mathf.Cos(angle) * radius * stepX,
-                                    Mathf.Sin(angle) * radius * stepY));
-                    cmd.DrawMesh(highlightQuad, Matrix4x4.identity, highlightStampMaterial, 0,
-                                 highlightPassIndex, highlightStampProperties);
+                    Vector3 offset = highlightPixelRight * (Mathf.Cos(angle) * radius) +
+                                     highlightPixelUp * (Mathf.Sin(angle) * radius);
+                    cmd.DrawMesh(highlightQuad, Matrix4x4.Translate(offset), highlightStampMaterial,
+                                 0, 0);
                 }
             }
-        }
-
-        private Material ScreenQuadMaterial(Texture source, Color color, int blendMode)
-        {
-            Material material = new Material(highlightShader) { hideFlags = HideFlags.HideAndDontSave };
-            HDMaterial.SetSurfaceType(material, true);
-            material.SetInt("_BlendMode", blendMode);
-            material.SetColor("_UnlitColor", color);
-            material.SetTexture("_UnlitColorMap", source);
-            material.SetInt("_CullMode", (int)CullMode.Off);
-            material.SetInt("_CullModeForward", (int)CullMode.Off);
-            HDMaterial.ValidateMaterial(material);
-            material.SetInt("_ZWrite", 0);
-            material.SetInt("_ZTestTransparent", (int)CompareFunction.Always);
-            material.SetInt("_ZTestDepthEqualForOpaque", (int)CompareFunction.Always);
-            material.SetInt("_CullMode", (int)CullMode.Off);
-            material.SetInt("_CullModeForward", (int)CullMode.Off);
-            return material;
         }
 
         private void DrawHighlightModels(CommandBuffer cmd)
@@ -752,7 +742,50 @@ namespace Kue.Internal
                 if (draw.renderer == null || draw.material == null)
                     continue;
                 for (int submesh = 0; submesh < draw.submeshCount; submesh++)
-                    cmd.DrawRenderer(draw.renderer, draw.material, submesh, highlightPassIndex);
+                    cmd.DrawRenderer(draw.renderer, draw.material, submesh, 0);
+            }
+        }
+
+        private void DumpHighlightBuffers()
+        {
+            if (highlightDumped || highlightMask == null || highlightRing == null)
+                return;
+            if (highlightDumpAt < 0f)
+            {
+                highlightDumpAt = Time.unscaledTime + 3f;
+                return;
+            }
+            if (Time.unscaledTime < highlightDumpAt || highlightDraws.Count == 0)
+                return;
+            highlightDumped = true;
+            try
+            {
+                string directory = Application.persistentDataPath;
+                SaveRenderTexture(highlightMask.rt, System.IO.Path.Combine(directory, "kue-mask.png"));
+                SaveRenderTexture(highlightRing.rt, System.IO.Path.Combine(directory, "kue-ring.png"));
+                Debug.Log("[Kue] Model highlight buffers dumped to " + directory);
+            }
+            catch (Exception e)
+            {
+                Debug.LogError("[Kue] Model highlight buffer dump failed: " + e);
+            }
+        }
+
+        private static void SaveRenderTexture(RenderTexture source, string path)
+        {
+            RenderTexture previous = RenderTexture.active;
+            Texture2D image = new Texture2D(source.width, source.height, TextureFormat.RGBA32, false);
+            try
+            {
+                RenderTexture.active = source;
+                image.ReadPixels(new Rect(0f, 0f, source.width, source.height), 0, 0);
+                image.Apply();
+                System.IO.File.WriteAllBytes(path, ImageConversion.EncodeToPNG(image));
+            }
+            finally
+            {
+                RenderTexture.active = previous;
+                Destroy(image);
             }
         }
 
@@ -824,40 +857,26 @@ namespace Kue.Internal
                 return;
             try
             {
-                if (!EnsureHighlightResources())
-                {
-                    DisableHighlightPass("[Kue] Model highlight resources unavailable");
+                if (!EnsureHighlightResources(context.hdCamera.actualWidth,
+                                              context.hdCamera.actualHeight))
                     return;
-                }
                 CommandBuffer cmd = context.cmd;
                 UpdateHighlightQuad(context.hdCamera.camera);
                 CoreUtils.SetRenderTarget(cmd, highlightMask, ClearFlag.Color, Color.clear);
                 DrawHighlightModels(cmd);
-                CoreUtils.SetRenderTarget(cmd, highlightBlur, ClearFlag.Color, Color.clear);
+                CoreUtils.SetRenderTarget(cmd, highlightRing, ClearFlag.Color, Color.clear);
                 StampHighlightRing(cmd);
-                cmd.DrawMesh(highlightQuad, Matrix4x4.identity, highlightCutoutMaterial, 0,
-                             highlightPassIndex);
-                CoreUtils.SetRenderTarget(cmd, context.cameraColorBuffer,
-                                          context.cameraDepthBuffer);
-                cmd.DrawMesh(highlightQuad, Matrix4x4.identity, highlightRingMaterial, 0,
-                             highlightPassIndex);
+                cmd.DrawMesh(highlightQuad, Matrix4x4.identity, highlightCutoutMaterial, 0, 0);
+                CoreUtils.SetRenderTarget(cmd, context.cameraColorBuffer);
+                cmd.DrawMesh(highlightQuad, Matrix4x4.identity, highlightRingMaterial, 0, 0);
                 if (!highlightResourcesLogged)
                 {
                     highlightResourcesLogged = true;
-                    Vector4 scale = RTHandles.rtHandleProperties.rtHandleScale;
-                    Debug.Log("[Kue] Model highlight ring: pass=" + highlightPassIndex + " mask=" +
-                              highlightMask.rt.width + "x" + highlightMask.rt.height + " scale=" +
-                              scale.x.ToString("F3") + "," + scale.y.ToString("F3") + " draws=" +
-                              highlightDraws.Count + " near=" +
-                              context.hdCamera.camera.nearClipPlane.ToString("F3") + " quad0=" +
+                    Debug.Log("[Kue] Model highlight ring: shader=" + highlightShader.name +
+                              " size=" + highlightWidth + "x" + highlightHeight + " draws=" +
+                              highlightDraws.Count + " quad0=" +
                               highlightQuadVertices[0].ToString("F2") + " cam=" +
-                              context.hdCamera.camera.transform.position.ToString("F2") +
-                              " blend=" + highlightRingMaterial.GetInt("_SrcBlend") + "/" +
-                              highlightRingMaterial.GetInt("_DstBlend") + " cutout=" +
-                              highlightCutoutMaterial.GetInt("_SrcBlend") + "/" +
-                              highlightCutoutMaterial.GetInt("_DstBlend") + " ztest=" +
-                              highlightRingMaterial.GetInt("_ZTestDepthEqualForOpaque") +
-                              " keywords=" + string.Join(" ", highlightRingMaterial.shaderKeywords));
+                              context.hdCamera.camera.transform.position.ToString("F2"));
                 }
             }
             catch (Exception e)

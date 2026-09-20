@@ -107,6 +107,7 @@ references=(
     UnityEngine.UI.dll
     Unity.RenderPipelines.Core.Runtime.dll
     Unity.RenderPipelines.HighDefinition.Runtime.dll
+    UnityEngine.ImageConversionModule.dll
 )
 for reference in "${references[@]}"; do
     if [[ ! -f "$managed/$reference" ]]; then
