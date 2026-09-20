@@ -8,8 +8,8 @@
 
 namespace kue {
 
-inline constexpr std::size_t kRuntimeCatalogCapacity = 256;
-inline constexpr std::size_t kRuntimeCatalogNameCapacity = 2048;
+inline constexpr std::size_t kRuntimeCatalogCapacity = 1024;
+inline constexpr std::size_t kRuntimeCatalogNameCapacity = 256;
 inline constexpr std::size_t kRuntimeCatalogTextCapacity =
     kRuntimeCatalogCapacity * kRuntimeCatalogNameCapacity;
 

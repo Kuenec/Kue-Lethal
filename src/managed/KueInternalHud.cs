@@ -373,6 +373,9 @@ namespace Kue.Internal
         private StartOfRound catalogRound;
         private bool enemyCatalogReady;
         private bool itemCatalogReady;
+        private float nextCatalogRescan;
+        private int enemyCatalogSignature;
+        private int itemCatalogSignature;
         private bool localKillPending;
         private bool flyEnabled;
         private PlayerControllerB flyPlayer;
@@ -567,6 +570,7 @@ namespace Kue.Internal
                 UpdateOutlineColors();
             }
             RefreshCatalogLifecycle();
+            RescanCatalogs();
             RefreshEnemyCatalog();
             RefreshItemCatalog();
             ProcessPendingLocalKill();
@@ -1395,6 +1399,7 @@ namespace Kue.Internal
             if (enemyCatalogReady)
                 return;
             EnemyType[] assets = Resources.FindObjectsOfTypeAll<EnemyType>();
+            enemyCatalogSignature = assets.Length;
             enemyCatalogBuffer.Clear();
             catalogInstanceIds.Clear();
             foreach (EnemyType type in assets)
@@ -1418,7 +1423,7 @@ namespace Kue.Internal
             {
                 EnemyType type = enemyCatalogBuffer[i];
                 CatalogReportResult report =
-                    NativeBridge.ReportEnemyType(type.GetInstanceID(), type.enemyName);
+                    NativeBridge.ReportEnemyType(type.GetInstanceID(), CatalogName(type.enemyName));
                 if (report != CatalogReportResult.Recorded)
                 {
                     NativeBridge.AbortEnemyCatalog();
@@ -1448,6 +1453,40 @@ namespace Kue.Internal
             Debug.Log("[Kue] Runtime enemy catalog: " + enemyCatalog.Count + " installed types");
         }
 
+        private void RescanCatalogs()
+        {
+            if (Time.unscaledTime < nextCatalogRescan)
+                return;
+            nextCatalogRescan = Time.unscaledTime + 10f;
+            if (enemyCatalogReady &&
+                Resources.FindObjectsOfTypeAll<EnemyType>().Length != enemyCatalogSignature)
+            {
+                enemyCatalogReady = false;
+                Debug.Log("[Kue] Enemy types changed; rescanning the catalog");
+            }
+            StartOfRound round = StartOfRound.Instance;
+            if (itemCatalogReady && round != null &&
+                ItemCatalogSignature(round, Resources.FindObjectsOfTypeAll<Item>().Length) !=
+                    itemCatalogSignature)
+            {
+                itemCatalogReady = false;
+                Debug.Log("[Kue] Items changed; rescanning the catalog");
+            }
+        }
+
+        private static int ItemCatalogSignature(StartOfRound round, int loadedCount)
+        {
+            int listed = round.allItemsList != null && round.allItemsList.itemsList != null
+                             ? round.allItemsList.itemsList.Count
+                             : 0;
+            return listed * 65536 + loadedCount;
+        }
+
+        private static string CatalogName(string name)
+        {
+            return name.Length > 60 ? name.Substring(0, 60) : name;
+        }
+
         private void RefreshCatalogLifecycle()
         {
             StartOfRound currentRound = StartOfRound.Instance;
@@ -1472,6 +1511,8 @@ namespace Kue.Internal
             StartOfRound round = StartOfRound.Instance;
             if (round == null || round.allItemsList == null || round.allItemsList.itemsList == null)
                 return;
+            Item[] loadedItems = Resources.FindObjectsOfTypeAll<Item>();
+            itemCatalogSignature = ItemCatalogSignature(round, loadedItems.Length);
             itemCatalogBuffer.Clear();
             catalogInstanceIds.Clear();
             foreach (Item item in round.allItemsList.itemsList)
@@ -1482,7 +1523,7 @@ namespace Kue.Internal
                     continue;
                 itemCatalogBuffer.Add(item);
             }
-            foreach (Item item in Resources.FindObjectsOfTypeAll<Item>())
+            foreach (Item item in loadedItems)
             {
                 if (item == null || item.spawnPrefab == null ||
                     string.IsNullOrEmpty(item.itemName) ||
@@ -1503,7 +1544,7 @@ namespace Kue.Internal
             {
                 Item item = itemCatalogBuffer[i];
                 CatalogReportResult report =
-                    NativeBridge.ReportItemType(item.GetInstanceID(), item.itemName);
+                    NativeBridge.ReportItemType(item.GetInstanceID(), CatalogName(item.itemName));
                 if (report != CatalogReportResult.Recorded)
                 {
                     NativeBridge.AbortItemCatalog();
@@ -1639,6 +1680,7 @@ namespace Kue.Internal
                 return;
             }
             StartOfRound.Instance.currentLevel.maxEnemyPowerCount = int.MaxValue;
+            List<EnemyAI> spawned = new List<EnemyAI>();
             for (int i = 0; i < count; i++)
             {
                 Vector3 position =
@@ -1648,9 +1690,19 @@ namespace Kue.Internal
                 else
                 {
                     SpawnNestForEnemy(type, position);
-                    RoundManager.Instance.SpawnEnemyGameObject(position, 0f, -1, type);
+                    NetworkObjectReference reference =
+                        RoundManager.Instance.SpawnEnemyGameObject(position, 0f, -1, type);
+                    NetworkObject networkObject;
+                    if (reference.TryGet(out networkObject) && networkObject != null)
+                    {
+                        EnemyAI enemy = networkObject.GetComponentInParent<EnemyAI>();
+                        if (enemy != null)
+                            spawned.Add(enemy);
+                    }
                 }
             }
+            if (spawned.Count > 0)
+                StartCoroutine(ApplyHabitatAfterStart(spawned, spawnOutside));
             string area = spawnOutside ? " outside" : " inside";
             Debug.Log("[Kue] Spawned " + count + " x " + type.enemyName + area +
                       (spawnOutside != outside ? " (enemy habitat)" : ""));
@@ -1922,6 +1974,24 @@ namespace Kue.Internal
             return true;
         }
 
+        private static void SyncEnemyHabitat(EnemyAI enemy, bool outside)
+        {
+            if (enemy.isOutside == outside)
+                return;
+            enemy.SetEnemyOutside(outside);
+            Debug.Log("[Kue] " + enemy.name + " switched to hunting " +
+                      (outside ? "outside" : "inside"));
+        }
+
+        private IEnumerator ApplyHabitatAfterStart(List<EnemyAI> enemies, bool outside)
+        {
+            yield return null;
+            yield return null;
+            foreach (EnemyAI enemy in enemies)
+                if (enemy != null && !enemy.isEnemyDead && enemy.path1 != null)
+                    SyncEnemyHabitat(enemy, outside);
+        }
+
         private IEnumerator StabilizeEnemyTeleport(List<EnemyAI> enemies, PlayerControllerB target,
                                                    int frames)
         {
@@ -1952,6 +2022,8 @@ namespace Kue.Internal
                             enemy.ChangeEnemyOwnerServerRpc(local.actualClientId);
                         if (MoveEnemyAndSync(enemy, position, local))
                             movedEnemies.Add(enemy.GetInstanceID());
+                        if (owned && enemy.path1 != null)
+                            SyncEnemyHabitat(enemy, !target.isInsideFactory);
                     }
                     catch (Exception e)
                     {

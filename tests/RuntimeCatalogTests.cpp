@@ -167,9 +167,10 @@ void commitInstalledCatalogs(TestRun& run) {
 }
 
 void testDeclaredStorageAndGeneration(TestRun& run) {
-    static_assert(kue::kRuntimeCatalogCapacity == 256);
-    static_assert(kue::kRuntimeCatalogNameCapacity == 2048);
-    static_assert(kue::kRuntimeCatalogTextCapacity == 524288);
+    static_assert(kue::kRuntimeCatalogCapacity == 1024);
+    static_assert(kue::kRuntimeCatalogNameCapacity == 256);
+    static_assert(kue::kRuntimeCatalogTextCapacity ==
+                  kue::kRuntimeCatalogCapacity * kue::kRuntimeCatalogNameCapacity);
     static_assert(sizeof(kue::RuntimeCatalogs) <= std::size_t{1600} * std::size_t{1024});
     static_assert(!std::is_copy_constructible_v<kue::RuntimeCatalogs>);
     static_assert(!std::is_copy_assignable_v<kue::RuntimeCatalogs>);
@@ -600,8 +601,9 @@ void testFullCapacity(TestRun& run) {
     constexpr std::string_view digits = "0123456789abcdef";
     for (std::size_t index = 0; index < kue::kRuntimeCatalogCapacity; ++index) {
         storage.fill('x');
-        storage[0] = digits[index / 16];
-        storage[1] = digits[index % 16];
+        storage[0] = digits[index / 256];
+        storage[1] = digits[(index / 16) % 16];
+        storage[2] = digits[index % 16];
         run.expect(gCatalogs
                            .reportEnemy(asset(index + 1),
                                         name(std::string_view{storage.data(), storage.size()}))
@@ -610,10 +612,10 @@ void testFullCapacity(TestRun& run) {
     }
     run.expect(gCatalogs.reportEnemy(asset(999), name("overflow")).result ==
                    kue::CatalogReportResult::CapacityExceeded,
-               "the 257th catalog entry is rejected before storage");
+               "the entry past capacity is rejected before storage");
     const kue::CatalogCommitOutcome overflow = gCatalogs.commitEnemyCatalog();
     run.expect(overflow.result == kue::CatalogCommitResult::PriorReportFailed &&
-                   overflow.failure.actual == 257 &&
+                   overflow.failure.actual == kue::kRuntimeCatalogCapacity + 1 &&
                    overflow.failure.limit == kue::kRuntimeCatalogCapacity,
                "capacity failure preserves exact actual and limit values");
     run.expect(gCatalogs.enemyCount() == 0 && gCatalogs.enemyGeneration().value == 0,
@@ -623,8 +625,9 @@ void testFullCapacity(TestRun& run) {
                "a full valid transaction begins after rejection");
     for (std::size_t index = 0; index < kue::kRuntimeCatalogCapacity; ++index) {
         storage.fill('y');
-        storage[0] = digits[index / 16];
-        storage[1] = digits[index % 16];
+        storage[0] = digits[index / 256];
+        storage[1] = digits[(index / 16) % 16];
+        storage[2] = digits[index % 16];
         run.expect(gCatalogs
                            .reportEnemy(asset(index + 1),
                                         name(std::string_view{storage.data(), storage.size()}))
@@ -634,8 +637,9 @@ void testFullCapacity(TestRun& run) {
     run.expect(gCatalogs.commitEnemyCatalog().result == kue::CatalogCommitResult::Committed,
                "a corrected full-capacity retry commits");
     run.expect(gCatalogs.enemyCount() == kue::kRuntimeCatalogCapacity,
-               "a full-capacity commit exposes all 256 entries");
-    run.expect(gCatalogs.enemyAt(255).entry.name.size() == kue::kRuntimeCatalogNameCapacity,
+               "a full-capacity commit exposes every entry");
+    run.expect(gCatalogs.enemyAt(kue::kRuntimeCatalogCapacity - 1).entry.name.size() ==
+                   kue::kRuntimeCatalogNameCapacity,
                "the last full-capacity entry retains its complete name");
 }
 

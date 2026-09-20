@@ -178,7 +178,9 @@ void testPayloadBoundaries(TestRun& run) {
                "SpawnEnemy", "a zero catalog generation must be rejected");
     run.expect(kue::validatePlayerActionRequest(
                    {kue::PlayerAction::SpawnEnemy,
-                    kue::EnemySpawnPayload{{{7U}, 256U}, 1U, kue::EnemySpawnArea::Inside}}) ==
+                    kue::EnemySpawnPayload{{{7U}, static_cast<std::uint16_t>(
+                                                      kue::kRuntimeCatalogCapacity)},
+                                           1U, kue::EnemySpawnArea::Inside}}) ==
                    InvalidPayload,
                "SpawnEnemy", "an out-of-range catalog index must be rejected");
     run.expect(kue::validatePlayerActionRequest(
