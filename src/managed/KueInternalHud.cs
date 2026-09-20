@@ -385,7 +385,10 @@ namespace Kue.Internal
         private float flapPhase;
         private readonly List<Transform> flapBones = new List<Transform>();
         private readonly List<float> flapBoneSides = new List<float>();
+        private readonly List<Quaternion> flapBaseRotations = new List<Quaternion>();
+        private readonly List<Quaternion> flapAppliedRotations = new List<Quaternion>();
         private PlayerControllerB flapPlayer;
+        private readonly HashSet<int> hivelessBees = new HashSet<int>();
         private bool thirdPersonEnabled;
         private PlayerControllerB thirdPersonPlayer;
         private Camera thirdPersonCamera;
@@ -474,6 +477,7 @@ namespace Kue.Internal
             RenderPipelineManager.endCameraRendering -= OnEndCameraRendering;
             RestoreThirdPersonCamera();
             SetThirdPerson(false);
+            RestoreFlapBones();
             ReleaseActiveInputState();
         }
 
@@ -1360,6 +1364,32 @@ namespace Kue.Internal
             Debug.Log("[Kue] Local death executed directly");
         }
 
+        private void KillHivelessBees(EnemyAI enemy, PlayerControllerB local)
+        {
+            RedLocustBees bees = enemy as RedLocustBees;
+            if (bees == null || local == null || !local.IsHost)
+                return;
+            int instanceId = bees.GetInstanceID();
+            if (bees.hive != null)
+            {
+                hivelessBees.Remove(instanceId);
+                return;
+            }
+            if (hivelessBees.Add(instanceId))
+                return;
+            hivelessBees.Remove(instanceId);
+            try
+            {
+                bees.KillEnemyOnOwnerClient(true);
+                Debug.Log("[Kue] Removed " + bees.name +
+                          ": its hive is gone and the game errors every frame");
+            }
+            catch (Exception e)
+            {
+                Debug.LogError("[Kue] Hiveless bees removal failed: " + e);
+            }
+        }
+
         private void RefreshEnemyCatalog()
         {
             if (enemyCatalogReady)
@@ -1594,26 +1624,95 @@ namespace Kue.Internal
                 ReportActionFailure("Networked enemy spawning requires host");
                 return;
             }
-            GameObject[] nodes = outside ? RoundManager.Instance.outsideAINodes
-                                         : RoundManager.Instance.insideAINodes;
-            if (nodes == null || nodes.Length == 0)
+            EnemyType type = enemyCatalog[index];
+            bool spawnOutside = type.isOutsideEnemy || type.isDaytimeEnemy;
+            List<GameObject> nodes = LiveNodes(spawnOutside);
+            if (nodes.Count == 0)
             {
-                ReportActionFailure("Enemy spawn failed: requested navigation nodes unavailable");
+                spawnOutside = !spawnOutside;
+                nodes = LiveNodes(spawnOutside);
+            }
+            if (nodes.Count == 0)
+            {
+                ReportActionFailure(
+                    "Enemy spawn failed: no navigation nodes, land on a moon first");
                 return;
             }
             StartOfRound.Instance.currentLevel.maxEnemyPowerCount = int.MaxValue;
-            EnemyType type = enemyCatalog[index];
             for (int i = 0; i < count; i++)
             {
-                GameObject node = nodes[UnityEngine.Random.Range(0, nodes.Length)];
+                Vector3 position =
+                    nodes[UnityEngine.Random.Range(0, nodes.Count)].transform.position;
                 if (string.Equals(type.enemyName, "Bush Wolf", StringComparison.OrdinalIgnoreCase))
                     StartCoroutine(SpawnBushWolfManaged());
                 else
-                    RoundManager.Instance.SpawnEnemyGameObject(node.transform.position, 0f, -1,
-                                                               type);
+                {
+                    SpawnNestForEnemy(type, position);
+                    RoundManager.Instance.SpawnEnemyGameObject(position, 0f, -1, type);
+                }
             }
-            Debug.Log("[Kue] Spawned " + count + " x " + type.enemyName +
-                      (outside ? " outside" : " inside"));
+            string area = spawnOutside ? " outside" : " inside";
+            Debug.Log("[Kue] Spawned " + count + " x " + type.enemyName + area +
+                      (spawnOutside != outside ? " (enemy habitat)" : ""));
+            if (HUDManager.Instance != null)
+                HUDManager.Instance.DisplayTip("Kue", "Spawned " + count + " " + type.enemyName +
+                                                          area);
+        }
+
+        private static List<GameObject> LiveNodes(bool outside)
+        {
+            List<GameObject> live = new List<GameObject>();
+            GameObject[] nodes = outside ? RoundManager.Instance.outsideAINodes
+                                         : RoundManager.Instance.insideAINodes;
+            if (nodes != null)
+                foreach (GameObject node in nodes)
+                    if (node != null)
+                        live.Add(node);
+            return live;
+        }
+
+        private static Vector3 SnapToNavMesh(Vector3 position)
+        {
+            NavMeshHit hit;
+            if (NavMesh.SamplePosition(position, out hit, 6f, NavMesh.AllAreas) ||
+                NavMesh.SamplePosition(position, out hit, 40f, NavMesh.AllAreas))
+                return hit.position;
+            return position;
+        }
+
+        private void SpawnNestForEnemy(EnemyType type, Vector3 position)
+        {
+            if (type.nestSpawnPrefab == null || RoundManager.Instance == null ||
+                RoundManager.Instance.enemyNestSpawnObjects == null)
+                return;
+            GameObject nest = Instantiate(type.nestSpawnPrefab, position, Quaternion.identity);
+            NetworkObject networkObject = nest.GetComponentInChildren<NetworkObject>();
+            EnemyAINestSpawnObject spawnObject = nest.GetComponent<EnemyAINestSpawnObject>();
+            if (networkObject == null || spawnObject == null)
+            {
+                Destroy(nest);
+                return;
+            }
+            networkObject.Spawn(true);
+            RoundManager.Instance.enemyNestSpawnObjects.Insert(0, spawnObject);
+            type.nestsSpawned++;
+            StartCoroutine(DespawnNestAfterUse(spawnObject));
+        }
+
+        private IEnumerator DespawnNestAfterUse(EnemyAINestSpawnObject nest)
+        {
+            yield return null;
+            yield return null;
+            if (nest == null)
+                yield break;
+            if (RoundManager.Instance != null &&
+                RoundManager.Instance.enemyNestSpawnObjects != null)
+                RoundManager.Instance.enemyNestSpawnObjects.Remove(nest);
+            NetworkObject networkObject = nest.GetComponentInChildren<NetworkObject>();
+            if (networkObject != null && networkObject.IsSpawned)
+                networkObject.Despawn(true);
+            else
+                Destroy(nest.gameObject);
         }
 
         private IEnumerator SpawnBushWolfManaged()
@@ -1658,7 +1757,7 @@ namespace Kue.Internal
                 return;
             }
             EnemyType type = enemyCatalog[index];
-            Vector3 position = TargetPosition(target) + TargetForward(target) * 2f;
+            Vector3 position = SnapToNavMesh(TargetPosition(target) + TargetForward(target) * 2f);
             List<EnemyAI> spawned = new List<EnemyAI>();
             for (int i = 0; i < count; i++)
             {
@@ -1668,6 +1767,7 @@ namespace Kue.Internal
                     StartCoroutine(SpawnBushWolfAtManaged(position + offset));
                 else
                 {
+                    SpawnNestForEnemy(type, position + offset);
                     NetworkObjectReference reference =
                         RoundManager.Instance.SpawnEnemyGameObject(position + offset, 0f, -1, type);
                     NetworkObject networkObject;
@@ -1827,7 +1927,8 @@ namespace Kue.Internal
             HashSet<int> movedEnemies = new HashSet<int>();
             for (int frame = 0; frame < frames; frame++)
             {
-                Vector3 center = TargetPosition(target) + TargetForward(target) * 2f;
+                Vector3 center =
+                    SnapToNavMesh(TargetPosition(target) + TargetForward(target) * 2f);
                 int layoutIndex = 0;
                 foreach (EnemyAI enemy in enemies)
                 {
@@ -1871,12 +1972,26 @@ namespace Kue.Internal
             int clientId = (packed >> 17) & 0xfff;
             PlayerControllerB target = PlayerByClientId(clientId);
             PlayerControllerB local = LocalPlayer();
-            if (target == null || local == null || !local.IsHost || index < 0 ||
-                index >= itemCatalog.Count || StartOfRound.Instance == null)
+            if (target == null || local == null || StartOfRound.Instance == null)
+            {
+                ReportActionFailure("Item spawn failed: target player unavailable");
                 return;
+            }
+            if (!local.IsHost)
+            {
+                ReportActionFailure("Item spawning requires host");
+                return;
+            }
+            if (index < 0 || index >= itemCatalog.Count)
+            {
+                ReportActionFailure("Item spawn failed: catalog entry " + index + " of " +
+                                    itemCatalog.Count + " unavailable");
+                return;
+            }
             Item item = itemCatalog[index];
             Vector3 position =
                 target.transform.position + Vector3.up * 1.2f + target.transform.forward * 1.5f;
+            int spawned = 0;
             for (int i = 0; i < count; i++)
             {
                 GameObject gameObject = Instantiate(
@@ -1895,9 +2010,18 @@ namespace Kue.Internal
                                                  Mathf.Max(item.minValue + 1, item.maxValue + 1)));
                 networkObject.Spawn(false);
                 PlaceItemAtPlayer(grabbable, target, position);
+                spawned++;
             }
+            if (spawned == 0)
+            {
+                ReportActionFailure("Item spawn failed: " + item.itemName +
+                                    " has no grabbable network prefab");
+                return;
+            }
+            Debug.Log("[Kue] Spawned " + spawned + " x " + item.itemName + " at " +
+                      target.playerUsername + " position=" + position);
             if (HUDManager.Instance != null)
-                HUDManager.Instance.DisplayTip("Kue", "Spawned " + count + " " + item.itemName);
+                HUDManager.Instance.DisplayTip("Kue", "Spawned " + spawned + " " + item.itemName);
         }
 
         private static void PlaceItemAtPlayer(GrabbableObject item, PlayerControllerB target,
@@ -2027,6 +2151,7 @@ namespace Kue.Internal
 
         private void RestoreFlyState()
         {
+            RestoreFlapBones();
             if (flyController != null)
                 flyController.enabled = true;
             if (flyPlayer != null)
@@ -2280,6 +2405,8 @@ namespace Kue.Internal
         {
             flapBones.Clear();
             flapBoneSides.Clear();
+            flapBaseRotations.Clear();
+            flapAppliedRotations.Clear();
             flapPlayer = player;
             Transform[] roots = { player.playerModelArmsMetarig,
                                   player.thisPlayerModel != null ? player.thisPlayerModel.rootBone
@@ -2300,6 +2427,8 @@ namespace Kue.Internal
                         continue;
                     flapBones.Add(bone);
                     flapBoneSides.Add(BoneSide(bone));
+                    flapBaseRotations.Add(bone.localRotation);
+                    flapAppliedRotations.Add(bone.localRotation);
                 }
             }
         }
@@ -2308,11 +2437,14 @@ namespace Kue.Internal
         {
             if (!flyEnabled || flyPlayer == null)
             {
-                flapPlayer = null;
+                RestoreFlapBones();
                 return;
             }
             if (flapPlayer != flyPlayer)
+            {
+                RestoreFlapBones();
                 CollectFlapBones(flyPlayer);
+            }
             Keyboard keyboard = Keyboard.current;
             bool climbing = keyboard != null && keyboard.spaceKey.isPressed;
             flapPhase += Time.unscaledDeltaTime * (climbing ? FlapClimbCycleSpeed : FlapCycleSpeed);
@@ -2324,10 +2456,31 @@ namespace Kue.Internal
                 Transform bone = flapBones[i];
                 if (bone == null)
                     continue;
-                float side = flapBoneSides[i];
-                bone.localRotation *= Quaternion.AngleAxis(flap * side, Vector3.forward) *
-                                      Quaternion.AngleAxis(lift, Vector3.right);
+                Quaternion current = bone.localRotation;
+                Quaternion baseRotation =
+                    current == flapAppliedRotations[i] ? flapBaseRotations[i] : current;
+                Quaternion offset =
+                    Quaternion.AngleAxis(flap * flapBoneSides[i], Vector3.forward) *
+                    Quaternion.AngleAxis(lift, Vector3.right);
+                bone.localRotation = baseRotation * offset;
+                flapBaseRotations[i] = baseRotation;
+                flapAppliedRotations[i] = bone.localRotation;
             }
+        }
+
+        private void RestoreFlapBones()
+        {
+            for (int i = 0; i < flapBones.Count; i++)
+            {
+                Transform bone = flapBones[i];
+                if (bone != null && bone.localRotation == flapAppliedRotations[i])
+                    bone.localRotation = flapBaseRotations[i];
+            }
+            flapBones.Clear();
+            flapBoneSides.Clear();
+            flapBaseRotations.Clear();
+            flapAppliedRotations.Clear();
+            flapPlayer = null;
         }
 
         private static UnityEngine.Object[] FindAll(string typeName)
@@ -3135,6 +3288,7 @@ namespace Kue.Internal
                 EnemyAI enemy = loaded as EnemyAI;
                 if (enemy != null && !enemy.isEnemyDead)
                 {
+                    KillHivelessBees(enemy, local);
                     Add(enemy.enemyType != null ? enemy.enemyType.enemyName : enemy.GetType().Name,
                         enemy.transform, enemy, outlineColors[2], Flag(2), -1, false, 12f,
                         MarkKind.Enemy);
