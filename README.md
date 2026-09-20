@@ -1,66 +1,53 @@
-# KUE-LETHAL
+# Kue Lethal
 
-Kue Lethal is an internal Lethal Company menu for x86-64 Linux and Windows. On Linux it runs inside the Proton/Wine game process; on Windows it runs inside the native game process. Either way it installs a managed Unity HUD that renders the ImGui menu and ESP in the game frame. FYI: This was only made in mind for me
+An in-process menu for Lethal Company on Linux (Proton) and Windows. It loads into the running game, installs a small managed HUD inside Unity, and draws its ImGui menu and ESP directly in the game frame. There is no external overlay window and nothing to alt-tab to.
 
-## Features
+This is a personal project. It works well for me; it may or may not work for you.
+
+## What it does
 
 | Area | Features |
 |---|---|
-| Self | Infinite stamina, no weight, battery, expanded inventory, fly (with flapping arms), third person, heal, and kill |
-| ESP | Players, items, enemies, entrances, fire exits, and ship silhouettes and labels |
-| Players | Teleport, kill, heal, insanity, one-shot lure, and persistent targeting |
-| Enemies | Runtime catalog spawning, targeted spawning, teleporting, stunning, and killing |
-| Items | Runtime catalog spawning, teleporting to a selected player, depositing all ship scrap on the company desk, and adding terminal credits (host) |
-| Trolls | Ship, factory, terminal, mine, turret, bridge, vehicle, shotgun, and map actions |
+| Self | Infinite stamina, no weight, infinite battery, expanded inventory, fly (with flapping arms), third person, heal, kill |
+| Visuals | ESP for players, items, enemies, entrances, fire exits, and the ship, with model outlines, names, scrap values, distances, and tracer lines |
+| Players | Teleport, kill, heal, insanity control, one-shot enemy lure, and persistent targeting |
+| Enemies | Spawn any installed enemy type, spawn or teleport enemies onto a player, stun or kill everything |
+| Items | Spawn any installed item, teleport loose items to a player, deposit all ship scrap on the company desk, add terminal credits (host) |
+| Trolls | Ship, factory, terminal, landmine, turret, bridge, vehicle, shotgun, and company-desk actions |
 
-ESP settings include silhouettes, labels, scrap values, distances, tracer lines, maximum distance, scrap-tier colors, and category colors. The runtime catalogs enemies and items from the installed game assets rather than a fixed historical list.
+Enemy and item lists are read from the installed game assets at runtime, so new content shows up without an update here. ESP outlines are rendered by the game's own pipeline, which means they follow the model exactly and stay visible through walls.
 
 ## Requirements
 
-The build host is Linux x86-64 for both targets.
+Builds happen on Linux x86-64 for both targets.
 
-- GCC or Clang with C++20 support
-- CMake 3.24 or newer
-- pkg-config, Capstone 5, Wine, and Wine Mono
-- Lethal Company installed through Steam with its managed assemblies available
-- gdb only for attaching to an already-running game on Linux
-- For the Windows target: the MinGW-w64 x86-64 GCC toolchain (`x86_64-w64-mingw32-g++`); Wine
-  also runs the Windows test executables
+- GCC or Clang with C++20 support, CMake 3.24 or newer, pkg-config
+- Capstone 5, Wine, and Wine Mono (the managed HUD is compiled with Wine Mono's C# compiler)
+- Lethal Company installed through Steam; the build reads its managed assemblies
+- For the Windows target: the MinGW-w64 x86-64 toolchain (`x86_64-w64-mingw32-g++`)
+- For attaching on Linux: gdb
 
-The build locates the game under common native and Flatpak Steam paths. Set
-`KUE_GAME_MANAGED_DIR` to the game's `Lethal Company_Data/Managed` directory when it is elsewhere. Set `KUE_CSC` to Wine Mono's `csc.exe` if compiler discovery is ambiguous. `KUE_STEAM_COMMON` can
-override the Steam library root.
+The build finds the game under the usual native and Flatpak Steam paths and in any library listed in `libraryfolders.vdf`. If it can't, set `KUE_GAME_MANAGED_DIR` to the game's `Lethal Company_Data/Managed` directory. `KUE_CSC` pins a specific Wine Mono `csc.exe`, and `KUE_STEAM_COMMON` overrides the Steam library root.
 
 ## Building
+
+Linux:
 
 ```bash
 scripts/build.sh
 ```
 
-The command produces:
+produces `build/kuelethal.so` and `build/managed/KueInternalHud.dll`.
 
-- `build/kuelethal.so`
-- `build/managed/KueInternalHud.dll`
-
-The Windows target is cross-compiled from the same tree:
+Windows (cross-compiled from the same tree):
 
 ```bash
 TARGET=windows scripts/build.sh
 ```
 
-It produces:
+produces `build-windows/kuelethal.dll`, `build-windows/kue-inject.exe`, and `build-windows/managed/KueInternalHud.dll`. Copy the `build-windows` and `config` directories side by side onto the Windows machine; the DLL, the injector, and `managed/KueInternalHud.dll` need to stay together.
 
-- `build-windows/kuelethal.dll`
-- `build-windows/kue-inject.exe`
-- `build-windows/managed/KueInternalHud.dll`
-
-Copy the `build-windows` directory and the `config` directory next to each other onto the
-Windows machine, keeping `kuelethal.dll`, `kue-inject.exe`, and `managed/KueInternalHud.dll`
-together. Capstone 5.0.9 is fetched and built from source for the Windows target; set
-`KUE_CAPSTONE_SOURCE_DIR` together with `KUE_FETCH_DEPS=OFF` for an offline build.
-
-The default build fetches Dear ImGui and nlohmann/json at immutable commits. For an offline build,
-provide exact nlohmann/json 3.11.3 and ImGui 1.91.9b source trees:
+Dependencies (Dear ImGui, nlohmann/json, and Capstone for the Windows target) are fetched at pinned versions. For an offline build, point the build at exact source trees:
 
 ```bash
 cmake -S . -B build \
@@ -71,7 +58,9 @@ cmake -S . -B build \
 cmake --build build --parallel
 ```
 
-Both build modes compile project and bundled dependency sources with warnings treated as errors. To build only the dependency-independent native guards without Capstone, ImGui, game assemblies, or the production module:
+Add `-DKUE_CAPSTONE_SOURCE_DIR=/path/to/capstone-5.0.9` for an offline Windows build.
+
+Project sources compile with warnings treated as errors. To build and run only the dependency-free native tests:
 
 ```bash
 cmake -S . -B build-tests -DKUE_BUILD_MODULE=OFF
@@ -79,64 +68,51 @@ cmake --build build-tests --parallel
 ctest --test-dir build-tests --output-on-failure
 ```
 
-## Loading at process start
+The Windows test suite runs under Wine: `cmake --build build-windows --parallel && ctest --test-dir build-windows --output-on-failure`.
 
-The current module has an explicit `kue_start` entry and performs no work merely from being mapped.
-Plain `LD_PRELOAD` and `scripts/run.sh` therefore do not start the HUD. The native startup-profiler
-launcher is still under development; use running-game injection for the current intermediate build.
-`scripts/run.sh` currently validates and exports module, configuration, and log paths only.
+## Loading into the game
 
-By default, scripts write logs to
-`${XDG_STATE_HOME:-$HOME/.local/state}/kuelethal/kuelethal.log`. Set `KUE_LOG` to override it and
-`KUE_CONSOLE=1` to mirror runtime logs to the process console.
+Start Lethal Company first, then load the module.
 
-## Loading into a running game
-
-Launch Lethal Company first, then run:
+**Linux**
 
 ```bash
 scripts/inject.sh
 ```
 
-On Windows, launch Lethal Company and run `kue-inject.exe` from the `build-windows` directory (a
-double-click works). It finds the `Lethal Company.exe` process, refuses to load a second copy,
-loads `kuelethal.dll`, hands it the configuration and log paths through the exported
-`kue_start_remote` entry, and confirms the build identity and HUD delivery through the log exactly
-like the Linux injector. `KUE_MODULE`, `KUE_CONFIG`, `KUE_LOG`, and `GAME_PATTERN` (an exact
-executable name on Windows) override the defaults; the default log is
-`%LOCALAPPDATA%\kuelethal\kuelethal.log` and the default configuration is
-`..\config\kuelethal.json` relative to the injector. A failed start restores the target's
-environment and unloads the module.
+The script attaches with gdb, writes `KUE_CONFIG` and `KUE_LOG` into the game process, loads the module, calls its start entry, detaches, and then confirms through the log that the exact build it loaded came up. It refuses to load a second copy into the same process. Attaching needs ptrace permission; if that is prohibited on your system there is currently no other loader.
 
-`GAME_PATTERN` selects a different process pattern. `KUE_MODULE`, `KUE_CONFIG`, and `KUE_LOG`
-override the artifact and target-process settings. The injector writes `KUE_CONFIG` and `KUE_LOG`
-into the attached process before calling `dlopen`, immediately detaches, and verifies the exact build
-identity through the configured log. It refuses to load a second copy into the same process.
+**Windows**
 
-Attaching requires ptrace permission. If attachment is prohibited, no current loader starts the HUD;
-the native startup-profiler launcher must be completed instead of weakening the host's ptrace policy.
+Run `kue-inject.exe` from the `build-windows` directory (double-clicking it is fine). It finds the `Lethal Company.exe` process, loads `kuelethal.dll`, hands over the configuration and log paths, and confirms the build identity and HUD delivery through the log, the same way the Linux script does. A failed start restores the game's environment and unloads the module.
 
-## Menu and configuration
+Both loaders honor the same overrides: `KUE_MODULE`, `KUE_CONFIG`, `KUE_LOG`, and `GAME_PATTERN` (a process pattern on Linux, an exact executable name on Windows). Default log locations are `${XDG_STATE_HOME:-$HOME/.local/state}/kuelethal/kuelethal.log` on Linux and `%LOCALAPPDATA%\kuelethal\kuelethal.log` on Windows. Set `KUE_CONSOLE=1` to mirror runtime logs to the process console.
 
-Press Insert to open or close the menu. Escape also closes it and restores the captured game input
-state.
+`scripts/run.sh` only validates and exports the module, configuration, and log paths; the module never starts from merely being mapped, so a plain `LD_PRELOAD` does not start the HUD.
 
-- `Self`: local movement, inventory, health, and death controls
-- `Visuals`: ESP categories, silhouettes, labels, lines, distance, and colors
-- `Players`: per-player actions and enemy targeting
-- `Enemies`: spawning and global enemy actions
-- `Items`: spawning and teleporting items
-- `Trolls`: host and client-side world actions
-- `Settings`: menu key, update rates, and configuration saving
+## Using the menu
 
-The bundled configuration is `config/kuelethal.json`. `KUE_CONFIG` selects another file. Without an explicit path, the runtime also checks `$HOME/.config/kuelethal/config.json` on Linux,
-`%APPDATA%\kuelethal\config.json` on Windows, and the process working directory.
+Press Insert to open or close the menu. Escape also closes it and restores the game's input state.
+
+- **Self**: movement, inventory, health, fly, third person, and death controls
+- **Visuals**: ESP categories, outlines, labels, lines, distance, and colors
+- **Players**: per-player actions and enemy targeting
+- **Enemies**: spawning and global enemy actions
+- **Items**: spawning, teleporting, depositing scrap, and terminal credits
+- **Trolls**: host and client-side world actions
+- **Settings**: menu key, update rates, and configuration saving
+
+Some actions are host only because the game only lets the host perform them; the menu greys those out when you join as a client.
+
+## Configuration
+
+The bundled configuration is `config/kuelethal.json`. `KUE_CONFIG` selects another file. Without an explicit path, the runtime also checks `$HOME/.config/kuelethal/config.json` on Linux, `%APPDATA%\kuelethal\config.json` on Windows, and the process working directory. Changes made in the menu are saved back automatically.
 
 ## Project layout
 
 ```text
 config/       default runtime configuration
-cmake/        pinned dependency declarations
+cmake/        pinned dependency declarations and the MinGW toolchain
 scripts/      native, managed, launch, and live-attach commands
 src/core/     configuration and logging
 src/entry/    injectable module entry points
