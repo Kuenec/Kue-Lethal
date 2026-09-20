@@ -643,6 +643,8 @@ namespace Kue.Internal
             material.SetInt("_ZWrite", 0);
             material.SetInt("_ZTestDepthEqualForOpaque", (int)CompareFunction.Always);
             material.SetInt("_ZTestTransparent", (int)CompareFunction.Always);
+            material.SetInt("_CullMode", (int)CullMode.Off);
+            material.SetInt("_CullModeForward", (int)CullMode.Off);
             highlightPassIndex = material.FindPass("ForwardOnly");
             return material;
         }
@@ -682,7 +684,7 @@ namespace Kue.Internal
             highlightQuad.vertices = new Vector3[4];
             highlightQuad.uv = new[] { new Vector2(0f, 0f), new Vector2(1f, 0f), new Vector2(1f, 1f),
                                        new Vector2(0f, 1f) };
-            highlightQuad.triangles = new[] { 0, 1, 2, 0, 2, 3 };
+            highlightQuad.triangles = new[] { 0, 2, 1, 0, 3, 2, 0, 1, 2, 0, 2, 3 };
             return highlightPassIndex >= 0;
         }
 
@@ -737,6 +739,8 @@ namespace Kue.Internal
             material.SetInt("_ZWrite", 0);
             material.SetInt("_ZTestTransparent", (int)CompareFunction.Always);
             material.SetInt("_ZTestDepthEqualForOpaque", (int)CompareFunction.Always);
+            material.SetInt("_CullMode", (int)CullMode.Off);
+            material.SetInt("_CullModeForward", (int)CullMode.Off);
             return material;
         }
 
