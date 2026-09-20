@@ -13,9 +13,10 @@ This is a personal project. It works well for me; it may or may not work for you
 | Players | Teleport, kill, heal, insanity control, one-shot enemy lure, and persistent targeting |
 | Enemies | Spawn any installed enemy type, spawn or teleport enemies onto a player, stun or kill everything |
 | Items | Spawn any installed item, teleport loose items to a player, deposit all ship scrap on the company desk, add terminal credits (host) |
+| Moons | Route the ship to any moon the game knows, including ones the terminal hides, free of charge |
 | Trolls | Ship, factory, terminal, landmine, turret, bridge, vehicle, shotgun, and company-desk actions |
 
-Enemy and item lists are read from the installed game assets at runtime, so new content shows up without an update here. ESP outlines are rendered by the game's own pipeline, which means they follow the model exactly and stay visible through walls.
+Enemy, item, and moon lists are read from the installed game assets at runtime and rescanned while you play, so new content shows up without an update here. ESP outlines are rendered by the game's own pipeline, which means they follow the model exactly and stay visible through walls.
 
 ## Requirements
 
@@ -99,6 +100,7 @@ Press Insert to open or close the menu. Escape also closes it and restores the g
 - **Players**: per-player actions and enemy targeting
 - **Enemies**: spawning and global enemy actions
 - **Items**: spawning, teleporting, depositing scrap, and terminal credits
+- **Moons**: pick any known moon and route the ship there while in orbit
 - **Trolls**: host and client-side world actions
 - **Settings**: menu key, update rates, and configuration saving
 

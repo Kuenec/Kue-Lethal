@@ -62,7 +62,16 @@ class Interface {
     bool consumeSaveRequest();
 
   private:
-    enum class MenuTab : std::uint8_t { Self, Visuals, Players, Enemies, Items, Trolls, Settings };
+    enum class MenuTab : std::uint8_t {
+        Self,
+        Visuals,
+        Players,
+        Enemies,
+        Items,
+        Moons,
+        Trolls,
+        Settings
+    };
 
     void drawTabs();
     void drawTabButton(const char* label, MenuTab tab);
@@ -71,6 +80,7 @@ class Interface {
     void drawPlayersTab(const MenuSnapshot& snapshot);
     void drawEnemiesTab(const MenuSnapshot& snapshot, const RuntimeCatalogs& catalogs);
     void drawItemsTab(const MenuSnapshot& snapshot, const RuntimeCatalogs& catalogs);
+    void drawMoonsTab(const MenuSnapshot& snapshot, const RuntimeCatalogs& catalogs);
     void drawTrollsTab(const MenuSnapshot& snapshot);
     void drawSettingsTab(MenuConfiguration& configuration);
 
@@ -88,6 +98,7 @@ class Interface {
     std::size_t mSelectedSpawnPlayer = 0;
     std::size_t mSelectedItemType = 0;
     std::size_t mSelectedItemPlayer = 0;
+    std::size_t mSelectedMoon = 0;
     int mItemSpawnCount = 1;
     int mEnemySpawnCount = 1;
     int mCreditAmount = 1000;

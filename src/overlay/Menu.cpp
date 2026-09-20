@@ -429,6 +429,9 @@ void Interface::render(const MenuSnapshot& snapshot, const RuntimeCatalogs& cata
         case MenuTab::Items:
             drawItemsTab(snapshot, catalogs);
             break;
+        case MenuTab::Moons:
+            drawMoonsTab(snapshot, catalogs);
+            break;
         case MenuTab::Trolls:
             drawTrollsTab(snapshot);
             break;
@@ -464,6 +467,8 @@ void Interface::drawTabs() {
     drawTabButton("Enemies", MenuTab::Enemies);
     ImGui::SameLine();
     drawTabButton("Items", MenuTab::Items);
+    ImGui::SameLine();
+    drawTabButton("Moons", MenuTab::Moons);
     ImGui::SameLine();
     drawTabButton("Trolls", MenuTab::Trolls);
     ImGui::SameLine();
@@ -763,6 +768,57 @@ void Interface::drawItemsTab(const MenuSnapshot& snapshot, const RuntimeCatalogs
         ImGui::EndDisabled();
     } else {
         ImGui::TextColored(ImVec4(0.48f, 0.48f, 0.52f, 1.f), "No real player available");
+    }
+    ImGui::EndChild();
+}
+
+void Interface::drawMoonsTab(const MenuSnapshot& snapshot, const RuntimeCatalogs& catalogs) {
+    static_cast<void>(snapshot);
+    const float listWidth = 280.f;
+    const std::size_t moonCount = catalogs.moonCount();
+    if (mSelectedMoon >= moonCount)
+        mSelectedMoon = moonCount == 0 ? 0 : moonCount - 1;
+    const bool moonsVisible =
+        ImGui::BeginChild("##moon_types", ImVec2(listWidth, 0.f), ImGuiChildFlags_Borders);
+    if (moonsVisible) {
+        ImGui::TextColored(ImVec4(0.80f, 0.18f, 0.22f, 1.f), "Installed Moons");
+        ImGui::Separator();
+        if (moonCount == 0)
+            ImGui::TextWrapped("Waiting for the installed moon catalog...");
+        std::array<char, kRuntimeCatalogNameCapacity + 1> catalogLabel{};
+        for (std::size_t index = 0; index < moonCount; ++index) {
+            const MoonCatalogLookup entry = catalogs.moonAt(index);
+            if (entry.result != CatalogLookupResult::Found)
+                continue;
+            std::snprintf(catalogLabel.data(), catalogLabel.size(), "%.*s",
+                          static_cast<int>(entry.entry.name.size()), entry.entry.name.data());
+            ImGui::PushID(static_cast<int>(index));
+            if (ImGui::Selectable(catalogLabel.data(), mSelectedMoon == index))
+                mSelectedMoon = index;
+            ImGui::PopID();
+        }
+    }
+    ImGui::EndChild();
+    ImGui::SameLine();
+    const bool moonActionsVisible =
+        ImGui::BeginChild("##moon_actions", ImVec2(0.f, 0.f), ImGuiChildFlags_Borders);
+    if (!moonActionsVisible) {
+        ImGui::EndChild();
+        return;
+    }
+    sectionLabel("ROUTE THE SHIP");
+    const MoonCatalogLookup chosenMoon = catalogs.moonAt(mSelectedMoon);
+    if (chosenMoon.result == CatalogLookupResult::Found) {
+        ImGui::TextWrapped("%.*s", static_cast<int>(chosenMoon.entry.name.size()),
+                           chosenMoon.entry.name.data());
+        if (actionButton("Route Ship To Selected Moon", -1.f))
+            queueAction({PlayerAction::TravelToMoon, MoonTravelPayload{chosenMoon.entry.id}});
+        ImGui::TextWrapped("Free of charge. The ship must be in orbit and not already "
+                           "travelling. Every moon the game knows is listed, including ones "
+                           "the terminal hides; unlisted assets show as such and cannot be "
+                           "routed to.");
+    } else {
+        ImGui::TextColored(ImVec4(0.48f, 0.48f, 0.52f, 1.f), "No catalog yet");
     }
     ImGui::EndChild();
 }

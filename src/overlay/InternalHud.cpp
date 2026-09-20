@@ -205,6 +205,8 @@ ManagedPayloadEncoding encodeManagedPayload(const PlayerActionRequest& request,
     }
     if (const auto* payload = std::get_if<TerminalCreditsPayload>(&request.payload))
         return {ManagedPayloadStatus::Encoded, payload->amount};
+    if (std::holds_alternative<MoonTravelPayload>(request.payload))
+        return {ManagedPayloadStatus::Encoded, static_cast<int>(resolution.index)};
     const auto* payload = std::get_if<PlushieIntervalPayload>(&request.payload);
     if (!payload || payload->interval.count() > std::numeric_limits<int>::max())
         return {};
@@ -567,6 +569,47 @@ void MSABI abortItemCatalog() {
     static_cast<void>(gRuntimeCatalogs.abortItemCatalog());
 }
 
+int MSABI beginMoonCatalog() {
+    return static_cast<int>(gRuntimeCatalogs.beginMoonCatalog());
+}
+
+int MSABI reportMoonType(int instanceId, mono::MonoObject* name) {
+    const RuntimeAssetIdentity identity = runtimeAssetIdentityFromSigned32(instanceId);
+    std::array<char, mono::kManagedStringMaxUtf8Bytes> decodedBytes{};
+    std::string_view decoded;
+    if (!name || !readCatalogName(name, decodedBytes, decoded)) {
+        static_cast<void>(gRuntimeCatalogs.abortMoonCatalog());
+        return -1;
+    }
+    const CatalogReportOutcome outcome =
+        gRuntimeCatalogs.reportMoon(identity, OrderedCatalogName{decoded});
+    if (outcome.result != CatalogReportResult::Recorded) {
+        KUE_ERR(
+            "internal HUD: moon catalog report failed result=%u entry=%u actual=%llu limit=%llu",
+            static_cast<unsigned int>(outcome.result),
+            static_cast<unsigned int>(outcome.entryIndex),
+            static_cast<unsigned long long>(outcome.actual),
+            static_cast<unsigned long long>(outcome.limit));
+    }
+    return static_cast<int>(outcome.result);
+}
+
+int MSABI commitMoonCatalog() {
+    const CatalogCommitOutcome outcome = gRuntimeCatalogs.commitMoonCatalog();
+    if (outcome.result != CatalogCommitResult::Committed &&
+        outcome.result != CatalogCommitResult::Unchanged) {
+        KUE_ERR("internal HUD: moon catalog commit failed result=%u report=%u entry=%u",
+                static_cast<unsigned int>(outcome.result),
+                static_cast<unsigned int>(outcome.failure.result),
+                static_cast<unsigned int>(outcome.failure.entryIndex));
+    }
+    return static_cast<int>(outcome.result);
+}
+
+void MSABI abortMoonCatalog() {
+    static_cast<void>(gRuntimeCatalogs.abortMoonCatalog());
+}
+
 void MSABI reportFlyState(int enabled) {
     gFlyEnabled = enabled != 0;
 }
@@ -670,16 +713,24 @@ bool registerManagedBridge() {
     const bool itemCatalogAbort =
         mono::addInternalCall("Kue.Internal.NativeBridge::AbortItemCatalog",
                               reinterpret_cast<const void*>(&abortItemCatalog));
-    if (render && hudConfig && color && actions && catalogReset && lureState && catalogBegin &&
-        catalogEntry && catalogCommit && catalogAbort && activeCatalogBegin && activeCatalogEntry &&
-        activeCatalogCommit && activeCatalogAbort && flyState && hostState && itemCatalogBegin &&
-        itemCatalogEntry && itemCatalogCommit && itemCatalogAbort)
+    const bool moonCatalog =
+        mono::addInternalCall("Kue.Internal.NativeBridge::BeginMoonCatalog",
+                              reinterpret_cast<const void*>(&beginMoonCatalog)) &&
+        mono::addInternalCall("Kue.Internal.NativeBridge::ReportMoonType",
+                              reinterpret_cast<const void*>(&reportMoonType)) &&
+        mono::addInternalCall("Kue.Internal.NativeBridge::CommitMoonCatalog",
+                              reinterpret_cast<const void*>(&commitMoonCatalog)) &&
+        mono::addInternalCall("Kue.Internal.NativeBridge::AbortMoonCatalog",
+                              reinterpret_cast<const void*>(&abortMoonCatalog));
+    const bool registered = render && hudConfig && color && actions && catalogReset &&
+                            lureState && catalogBegin && catalogEntry && catalogCommit &&
+                            catalogAbort && activeCatalogBegin && activeCatalogEntry &&
+                            activeCatalogCommit && activeCatalogAbort && flyState && hostState &&
+                            itemCatalogBegin && itemCatalogEntry && itemCatalogCommit &&
+                            itemCatalogAbort && moonCatalog;
+    if (registered)
         KUE_INFO("internal HUD: Mono bridge registered");
-    return render && hudConfig && color && actions && catalogReset && lureState && catalogBegin &&
-           catalogEntry && catalogCommit && catalogAbort && activeCatalogBegin &&
-           activeCatalogEntry && activeCatalogCommit && activeCatalogAbort && flyState &&
-           hostState && itemCatalogBegin && itemCatalogEntry && itemCatalogCommit &&
-           itemCatalogAbort;
+    return registered;
 }
 
 }

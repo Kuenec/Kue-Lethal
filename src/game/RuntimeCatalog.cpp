@@ -67,6 +67,23 @@ CatalogAbortResult RuntimeCatalogs::abortItemCatalog() noexcept {
     return abort(Transaction::ItemCatalog);
 }
 
+CatalogBeginResult RuntimeCatalogs::beginMoonCatalog() noexcept {
+    return beginCatalog(Transaction::MoonCatalog, mMoons.generation);
+}
+
+CatalogReportOutcome RuntimeCatalogs::reportMoon(RuntimeAssetIdentity runtimeAsset,
+                                                 OrderedCatalogName orderedName) noexcept {
+    return reportCatalog(Transaction::MoonCatalog, runtimeAsset, orderedName);
+}
+
+CatalogCommitOutcome RuntimeCatalogs::commitMoonCatalog() noexcept {
+    return commitCatalog(Transaction::MoonCatalog, mMoons);
+}
+
+CatalogAbortResult RuntimeCatalogs::abortMoonCatalog() noexcept {
+    return abort(Transaction::MoonCatalog);
+}
+
 CatalogBeginResult RuntimeCatalogs::beginCatalog(Transaction transaction,
                                                  std::uint64_t generation) noexcept {
     if (mTransaction != Transaction::None)
@@ -309,12 +326,20 @@ std::size_t RuntimeCatalogs::itemCount() const noexcept {
     return mItems.count;
 }
 
+std::size_t RuntimeCatalogs::moonCount() const noexcept {
+    return mMoons.count;
+}
+
 EnemyCatalogGeneration RuntimeCatalogs::enemyGeneration() const noexcept {
     return {mEnemies.count == 0 ? 0 : mEnemies.generation};
 }
 
 ItemCatalogGeneration RuntimeCatalogs::itemGeneration() const noexcept {
     return {mItems.count == 0 ? 0 : mItems.generation};
+}
+
+MoonCatalogGeneration RuntimeCatalogs::moonGeneration() const noexcept {
+    return {mMoons.count == 0 ? 0 : mMoons.generation};
 }
 
 EnemyCatalogLookup RuntimeCatalogs::enemyAt(std::size_t index) const noexcept {
@@ -339,6 +364,17 @@ ItemCatalogLookup RuntimeCatalogs::itemAt(std::size_t index) const noexcept {
              liveName(mItems, index)}};
 }
 
+MoonCatalogLookup RuntimeCatalogs::moonAt(std::size_t index) const noexcept {
+    if (mMoons.count == 0)
+        return {CatalogLookupResult::NoCatalog, {}};
+    if (index >= static_cast<std::size_t>(mMoons.count))
+        return {CatalogLookupResult::IndexOutOfRange, {}};
+    const StoredCatalogEntry& stored = mMoons.entries[index];
+    return {CatalogLookupResult::Found,
+            {MoonTypeId{{mMoons.generation}, static_cast<std::uint16_t>(index)}, stored.asset,
+             liveName(mMoons, index)}};
+}
+
 EnemyCatalogLookup RuntimeCatalogs::enemy(EnemyTypeId id) const noexcept {
     if (mEnemies.count == 0)
         return {CatalogLookupResult::NoCatalog, {}};
@@ -355,6 +391,14 @@ ItemCatalogLookup RuntimeCatalogs::item(ItemTypeId id) const noexcept {
     return itemAt(id.index);
 }
 
+MoonCatalogLookup RuntimeCatalogs::moon(MoonTypeId id) const noexcept {
+    if (mMoons.count == 0)
+        return {CatalogLookupResult::NoCatalog, {}};
+    if (id.generation.value != mMoons.generation)
+        return {CatalogLookupResult::StaleGeneration, {}};
+    return moonAt(id.index);
+}
+
 void RuntimeCatalogs::resetForSessionEnd() noexcept {
     mEnemies.entries.fill(StoredCatalogEntry{});
     mEnemies.text.fill(0);
@@ -364,6 +408,10 @@ void RuntimeCatalogs::resetForSessionEnd() noexcept {
     mItems.text.fill(0);
     mItems.textBytes = 0;
     mItems.count = 0;
+    mMoons.entries.fill(StoredCatalogEntry{});
+    mMoons.text.fill(0);
+    mMoons.textBytes = 0;
+    mMoons.count = 0;
     mStaging.entries.fill(StoredCatalogEntry{});
     mStaging.text.fill(0);
     mStaging.textBytes = 0;

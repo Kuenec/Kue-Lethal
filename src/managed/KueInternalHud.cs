@@ -150,6 +150,18 @@ namespace Kue.Internal
 
         [MethodImpl(MethodImplOptions.InternalCall)]
         internal static extern void AbortItemCatalog();
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern CatalogBeginResult BeginMoonCatalog();
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern CatalogReportResult ReportMoonType(int instanceId, string name);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern CatalogCommitResult CommitMoonCatalog();
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern void AbortMoonCatalog();
     }
 
     public static class HudBootstrap
@@ -300,7 +312,10 @@ namespace Kue.Internal
         private readonly Vector2[] portalScreenCorners = new Vector2[4];
         private readonly List<EnemyType> enemyCatalogBuffer = new List<EnemyType>();
         private readonly List<Item> itemCatalogBuffer = new List<Item>();
+        private readonly List<SelectableLevel> moonCatalogBuffer = new List<SelectableLevel>();
+        private readonly List<int> moonLevelBuffer = new List<int>();
         private readonly HashSet<int> catalogInstanceIds = new HashSet<int>();
+        private readonly HashSet<string> usedCatalogNames = new HashSet<string>();
         private readonly Dictionary<EnemyType, int> enemyCatalogIndices =
             new Dictionary<EnemyType, int>();
         private readonly Dictionary<string, int> enemyCatalogNames =
@@ -364,18 +379,24 @@ namespace Kue.Internal
         private int lastGuiFrame = -1;
         private readonly Dictionary<ulong, bool> playerDeathState = new Dictionary<ulong, bool>();
         private readonly HashSet<int> persistentOwnedEnemies = new HashSet<int>();
-        private readonly HashSet<int> persistentActivatedEnemies = new HashSet<int>();
+        private readonly Dictionary<int, float> persistentActivatedEnemies =
+            new Dictionary<int, float>();
         private readonly List<EnemyAI> persistentEnemies = new List<EnemyAI>();
         private int persistentLureClientId = -1;
         private float nextPersistentEnemyRefresh;
         private readonly List<EnemyType> enemyCatalog = new List<EnemyType>();
         private readonly List<Item> itemCatalog = new List<Item>();
+        private readonly List<SelectableLevel> moonCatalog = new List<SelectableLevel>();
+        private readonly List<int> moonLevelIndices = new List<int>();
         private StartOfRound catalogRound;
         private bool enemyCatalogReady;
         private bool itemCatalogReady;
+        private bool moonCatalogReady;
         private float nextCatalogRescan;
         private int enemyCatalogSignature;
         private int itemCatalogSignature;
+        private int moonCatalogSignature;
+        private float nextLureNoise;
         private bool localKillPending;
         private bool flyEnabled;
         private PlayerControllerB flyPlayer;
@@ -573,6 +594,7 @@ namespace Kue.Internal
             RescanCatalogs();
             RefreshEnemyCatalog();
             RefreshItemCatalog();
+            RefreshMoonCatalog();
             ProcessPendingLocalKill();
             ProcessManagedActions();
             UpdatePlayerUtilities();
@@ -1154,12 +1176,25 @@ namespace Kue.Internal
         }
 
         private void ForceEnemyTarget(EnemyAI enemy, PlayerControllerB target,
-                                      bool refreshNetworkState)
+                                      bool refreshNetworkState, bool noise = false)
         {
             if (enemy == null || target == null || enemy.isEnemyDead)
                 return;
             enemy.targetPlayer = target;
             enemy.SetMovingTowardsTargetPlayer(target);
+            enemy.destination = SnapToNavMesh(target.transform.position);
+            enemy.moveTowardsDestination = true;
+            if (noise)
+            {
+                try
+                {
+                    enemy.DetectNoise(target.transform.position, 1f, 0, 0);
+                }
+                catch (Exception e)
+                {
+                    Debug.LogError("[Kue] Lure noise failed for " + enemy.name + ": " + e);
+                }
+            }
             if (!refreshNetworkState)
                 return;
 
@@ -1206,6 +1241,13 @@ namespace Kue.Internal
                 SetMember(enemy, "staringAtPlayer", target);
                 InvokeAny(enemy, "SwitchToBehaviourServerRpc", chase);
             }
+            else if (type == "DressGirlAI")
+            {
+                SetMember(enemy, "hauntingPlayer", target);
+                InvokeAny(enemy, "SwitchToBehaviourServerRpc", chase);
+            }
+            else if (type == "ButlerEnemyAI")
+                InvokeAny(enemy, "SwitchToBehaviourServerRpc", aggravated);
             else if (type == "RadMechAI")
             {
                 InvokeAny(enemy, "SetChargingForwardClientRpc", true);
@@ -1264,7 +1306,7 @@ namespace Kue.Internal
                 return;
             PlayerControllerB local = LocalPlayer();
             PlayerControllerB target = PlayerByClientId(persistentLureClientId);
-            if (local == null || target == null || target.isPlayerDead)
+            if (local == null || target == null)
             {
                 persistentLureClientId = -1;
                 persistentOwnedEnemies.Clear();
@@ -1273,6 +1315,11 @@ namespace Kue.Internal
                 NativeBridge.ReportPersistentLureTarget(-1);
                 return;
             }
+            if (target.isPlayerDead)
+                return;
+            bool noise = Time.unscaledTime >= nextLureNoise;
+            if (noise)
+                nextLureNoise = Time.unscaledTime + 0.5f;
 
             if (Time.unscaledTime >= nextPersistentEnemyRefresh)
             {
@@ -1309,15 +1356,24 @@ namespace Kue.Internal
                         }
                     }
                     if (EnemyOwnedBy(enemy, local))
-                        ForceEnemyTarget(enemy, target, persistentActivatedEnemies.Add(instanceId));
+                    {
+                        float activatedAt;
+                        bool refresh =
+                            !persistentActivatedEnemies.TryGetValue(instanceId, out activatedAt) ||
+                            Time.unscaledTime - activatedAt >= 1.5f;
+                        if (refresh)
+                            persistentActivatedEnemies[instanceId] = Time.unscaledTime;
+                        ForceEnemyTarget(enemy, target, refresh, noise);
+                    }
                 }
+                return;
             }
             foreach (EnemyAI enemy in persistentEnemies)
             {
                 if (enemy == null || enemy.isEnemyDead)
                     continue;
                 if (EnemyOwnedBy(enemy, local))
-                    ForceEnemyTarget(enemy, target, false);
+                    ForceEnemyTarget(enemy, target, false, noise);
             }
         }
 
@@ -1419,11 +1475,12 @@ namespace Kue.Internal
                 Debug.LogError("[Kue] Runtime enemy catalog begin failed: " + begin);
                 return;
             }
+            usedCatalogNames.Clear();
             for (int i = 0; i < enemyCatalogBuffer.Count; i++)
             {
                 EnemyType type = enemyCatalogBuffer[i];
-                CatalogReportResult report =
-                    NativeBridge.ReportEnemyType(type.GetInstanceID(), CatalogName(type.enemyName));
+                CatalogReportResult report = NativeBridge.ReportEnemyType(
+                    type.GetInstanceID(), UniqueCatalogName(type.enemyName));
                 if (report != CatalogReportResult.Recorded)
                 {
                     NativeBridge.AbortEnemyCatalog();
@@ -1472,6 +1529,139 @@ namespace Kue.Internal
                 itemCatalogReady = false;
                 Debug.Log("[Kue] Items changed; rescanning the catalog");
             }
+            if (moonCatalogReady && round != null &&
+                MoonCatalogSignature(round,
+                                     Resources.FindObjectsOfTypeAll<SelectableLevel>().Length) !=
+                    moonCatalogSignature)
+            {
+                moonCatalogReady = false;
+                Debug.Log("[Kue] Moons changed; rescanning the catalog");
+            }
+        }
+
+        private static int MoonCatalogSignature(StartOfRound round, int loadedCount)
+        {
+            int listed = round.levels != null ? round.levels.Length : 0;
+            return listed * 65536 + loadedCount;
+        }
+
+        private string UniqueCatalogName(string name)
+        {
+            string candidate = CatalogName(name);
+            for (int copy = 2; !usedCatalogNames.Add(candidate); copy++)
+                candidate = CatalogName(name) + " (" + copy + ")";
+            return candidate;
+        }
+
+        private static string MoonName(SelectableLevel level, bool unlisted)
+        {
+            string name = string.IsNullOrEmpty(level.PlanetName) ? level.name : level.PlanetName;
+            return unlisted ? name + " (unlisted)" : name;
+        }
+
+        private void RefreshMoonCatalog()
+        {
+            if (moonCatalogReady)
+                return;
+            StartOfRound round = StartOfRound.Instance;
+            if (round == null || round.levels == null)
+                return;
+            SelectableLevel[] loaded = Resources.FindObjectsOfTypeAll<SelectableLevel>();
+            moonCatalogSignature = MoonCatalogSignature(round, loaded.Length);
+            moonCatalogBuffer.Clear();
+            moonLevelBuffer.Clear();
+            catalogInstanceIds.Clear();
+            for (int i = 0; i < round.levels.Length; i++)
+            {
+                SelectableLevel level = round.levels[i];
+                if (level == null || !catalogInstanceIds.Add(level.GetInstanceID()))
+                    continue;
+                moonCatalogBuffer.Add(level);
+                moonLevelBuffer.Add(i);
+            }
+            int routable = moonCatalogBuffer.Count;
+            foreach (SelectableLevel level in loaded)
+            {
+                if (level == null || !catalogInstanceIds.Add(level.GetInstanceID()))
+                    continue;
+                moonCatalogBuffer.Add(level);
+                moonLevelBuffer.Add(-1);
+            }
+            if (moonCatalogBuffer.Count == 0)
+                return;
+            CatalogBeginResult begin = NativeBridge.BeginMoonCatalog();
+            if (begin != CatalogBeginResult.Begun)
+            {
+                Debug.LogError("[Kue] Runtime moon catalog begin failed: " + begin);
+                return;
+            }
+            usedCatalogNames.Clear();
+            for (int i = 0; i < moonCatalogBuffer.Count; i++)
+            {
+                SelectableLevel level = moonCatalogBuffer[i];
+                string name = UniqueCatalogName(MoonName(level, moonLevelBuffer[i] < 0));
+                CatalogReportResult report =
+                    NativeBridge.ReportMoonType(level.GetInstanceID(), name);
+                if (report != CatalogReportResult.Recorded)
+                {
+                    NativeBridge.AbortMoonCatalog();
+                    Debug.LogError("[Kue] Runtime moon catalog report failed at " + i + ": " +
+                                   report);
+                    return;
+                }
+            }
+            CatalogCommitResult commit = NativeBridge.CommitMoonCatalog();
+            if (commit != CatalogCommitResult.Committed &&
+                commit != CatalogCommitResult.Unchanged)
+            {
+                Debug.LogError("[Kue] Runtime moon catalog commit failed: " + commit);
+                return;
+            }
+            moonCatalog.Clear();
+            moonCatalog.AddRange(moonCatalogBuffer);
+            moonLevelIndices.Clear();
+            moonLevelIndices.AddRange(moonLevelBuffer);
+            moonCatalogReady = true;
+            Debug.Log("[Kue] Runtime moon catalog: " + moonCatalog.Count + " moons, " + routable +
+                      " routable");
+        }
+
+        private void TravelToMoonManaged(int index)
+        {
+            StartOfRound round = StartOfRound.Instance;
+            if (round == null || index < 0 || index >= moonCatalog.Count)
+            {
+                ReportActionFailure("Moon travel failed: catalog entry unavailable");
+                return;
+            }
+            SelectableLevel level = moonCatalog[index];
+            int levelIndex = moonLevelIndices[index];
+            string name = MoonName(level, levelIndex < 0);
+            if (levelIndex < 0)
+            {
+                ReportActionFailure("Moon travel failed: the ship has no route to " + name);
+                return;
+            }
+            if (!round.inShipPhase)
+            {
+                ReportActionFailure("Moon travel failed: the ship must be in orbit");
+                return;
+            }
+            if (round.travellingToNewLevel)
+            {
+                ReportActionFailure("Moon travel failed: the ship is already travelling");
+                return;
+            }
+            Terminal terminal = FindOne("Terminal") as Terminal;
+            if (terminal == null)
+            {
+                ReportActionFailure("Moon travel failed: terminal unavailable");
+                return;
+            }
+            round.ChangeLevelServerRpc(levelIndex, terminal.groupCredits);
+            Debug.Log("[Kue] Routing the ship to " + name + " (level " + levelIndex + ")");
+            if (HUDManager.Instance != null)
+                HUDManager.Instance.DisplayTip("Kue", "Routing to " + name);
         }
 
         private static int ItemCatalogSignature(StartOfRound round, int loadedCount)
@@ -1495,8 +1685,11 @@ namespace Kue.Internal
             catalogRound = currentRound;
             enemyCatalogReady = false;
             itemCatalogReady = false;
+            moonCatalogReady = false;
             enemyCatalog.Clear();
             itemCatalog.Clear();
+            moonCatalog.Clear();
+            moonLevelIndices.Clear();
             enemyCatalogIndices.Clear();
             enemyCatalogNames.Clear();
             activeEnemyCounts = new int[0];
@@ -1540,11 +1733,12 @@ namespace Kue.Internal
                 Debug.LogError("[Kue] Runtime item catalog begin failed: " + begin);
                 return;
             }
+            usedCatalogNames.Clear();
             for (int i = 0; i < itemCatalogBuffer.Count; i++)
             {
                 Item item = itemCatalogBuffer[i];
-                CatalogReportResult report =
-                    NativeBridge.ReportItemType(item.GetInstanceID(), CatalogName(item.itemName));
+                CatalogReportResult report = NativeBridge.ReportItemType(
+                    item.GetInstanceID(), UniqueCatalogName(item.itemName));
                 if (report != CatalogReportResult.Recorded)
                 {
                     NativeBridge.AbortItemCatalog();
@@ -2947,6 +3141,8 @@ namespace Kue.Internal
                 AddTerminalCreditsManaged(payload);
             else if (action == 47)
                 SetThirdPerson(!thirdPersonEnabled);
+            else if (action == 48)
+                TravelToMoonManaged(payload);
             else if (action == 22)
                 SpawnMaskedManaged();
             else if (action == 23)

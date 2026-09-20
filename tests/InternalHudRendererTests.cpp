@@ -359,9 +359,9 @@ void testExactPixelsAndConsumerRecovery(TestRun& run) {
     run.expect(first.frame.revision != 0,
                "the first accepted pixels carry a nonzero consumer revision");
     const std::uint64_t hash = pixelHash(first.frame);
-    if (hash != 1565097633067612323ULL)
+    if (hash != 422108125814630585ULL)
         std::cerr << "actual pixel hash: " << hash << '\n';
-    run.expect(hash == 1565097633067612323ULL,
+    run.expect(hash == 422108125814630585ULL,
                "the representative menu preserves its exact RGBA hash");
 
     RenderResult previous = first;
@@ -627,7 +627,7 @@ void testRejectedConfigurationAndTabState(TestRun& run) {
         const RenderResult self =
             successfulRender(run, harness, {}, "the tab rejection fixture initializes");
         const std::uint64_t selfHash = pixelHash(self.frame);
-        const RenderResult rejected = harness.render({1035.f, 382.f, true, 0.f}, invalidateTexture);
+        const RenderResult rejected = harness.render({1102.f, 382.f, true, 0.f}, invalidateTexture);
         run.expect(rejected.status == kue::internalhud::MenuRasterStatus::UnsupportedTexture,
                    "a tab change with an unsupported raster texture is rejected");
         harness.recreateContext();
@@ -637,8 +637,8 @@ void testRejectedConfigurationAndTabState(TestRun& run) {
                    "a rejected tab change leaves the live tab observable unchanged");
 
         const RenderResult accepted = successfulRender(
-            run, harness, {1035.f, 382.f, true, 0.f}, "the tab change succeeds on its first retry");
-        static_cast<void>(successfulRender(run, harness, {1035.f, 382.f, false, 0.f},
+            run, harness, {1102.f, 382.f, true, 0.f}, "the tab change succeeds on its first retry");
+        static_cast<void>(successfulRender(run, harness, {1102.f, 382.f, false, 0.f},
                                            "the tab retry release renders"));
         run.expect(pixelHash(accepted.frame) != selfHash,
                    "the accepted tab retry changes the visible menu exactly once");
@@ -682,9 +682,9 @@ void testRejectedActionAndSaveState(TestRun& run) {
         HudHarness harness;
         static_cast<void>(
             successfulRender(run, harness, {}, "the save rejection fixture initializes"));
-        static_cast<void>(successfulRender(run, harness, {1035.f, 382.f, true, 0.f},
+        static_cast<void>(successfulRender(run, harness, {1102.f, 382.f, true, 0.f},
                                            "the settings-tab setup press renders"));
-        static_cast<void>(successfulRender(run, harness, {1035.f, 382.f, false, 0.f},
+        static_cast<void>(successfulRender(run, harness, {1102.f, 382.f, false, 0.f},
                                            "the settings-tab setup release renders"));
         static_cast<void>(successfulRender(run, harness, {670.f, 611.f, true, 0.f},
                                            "the rejected save setup press renders"));

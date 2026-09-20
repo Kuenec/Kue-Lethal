@@ -62,6 +62,7 @@ enum class PlayerAction : std::uint8_t {
     DepositShipScrap,
     AddTerminalCredits,
     ToggleThirdPerson,
+    TravelToMoon,
 };
 
 enum class PlayerActionPayloadKind : std::uint8_t {
@@ -73,6 +74,7 @@ enum class PlayerActionPayloadKind : std::uint8_t {
     ItemAtPlayer,
     PlushieInterval,
     TerminalCredits,
+    MoonTravel,
 };
 
 enum class EnemySpawnArea : std::uint8_t { Inside, Outside };
@@ -112,10 +114,14 @@ struct TerminalCreditsPayload {
     int amount;
 };
 
+struct MoonTravelPayload {
+    MoonTypeId moon;
+};
+
 using PlayerActionPayload =
     std::variant<NoPlayerActionPayload, PlayerTargetPayload, EnemySpawnPayload,
                  EnemyAtPlayerPayload, ItemAtPlayerPayload, PlushieIntervalPayload,
-                 TerminalCreditsPayload>;
+                 TerminalCreditsPayload, MoonTravelPayload>;
 
 struct PlayerActionRequest {
     PlayerAction action = PlayerAction::None;
@@ -169,6 +175,8 @@ constexpr PlayerActionPayloadKind playerActionPayloadKind(PlayerAction action) n
         return PlayerActionPayloadKind::PlushieInterval;
     case PlayerAction::AddTerminalCredits:
         return PlayerActionPayloadKind::TerminalCredits;
+    case PlayerAction::TravelToMoon:
+        return PlayerActionPayloadKind::MoonTravel;
     case PlayerAction::KillAll:
     case PlayerAction::KillAllExceptLocal:
     case PlayerAction::KillAllEnemies:
@@ -223,6 +231,8 @@ playerActionPayloadKind(const PlayerActionPayload& payload) noexcept {
         return PlayerActionPayloadKind::PlushieInterval;
     case 6:
         return PlayerActionPayloadKind::TerminalCredits;
+    case 7:
+        return PlayerActionPayloadKind::MoonTravel;
     default:
         return PlayerActionPayloadKind::Invalid;
     }
@@ -258,6 +268,10 @@ validatePlayerActionRequest(const PlayerActionRequest& request) noexcept {
     if (const auto* payload = std::get_if<TerminalCreditsPayload>(&request.payload);
         payload && (payload->amount <= 0 || payload->amount > kMaximumTerminalCreditsPerAction))
         return PlayerActionValidation::InvalidPayload;
+    if (const auto* payload = std::get_if<MoonTravelPayload>(&request.payload);
+        payload && (payload->moon.generation.value == 0 ||
+                    static_cast<std::size_t>(payload->moon.index) >= kRuntimeCatalogCapacity))
+        return PlayerActionValidation::InvalidPayload;
     return PlayerActionValidation::Valid;
 }
 
@@ -278,6 +292,10 @@ resolvePlayerActionCatalog(const PlayerActionRequest& request,
         index = lookup.entry.id.index;
     } else if (const auto* itemAtPlayer = std::get_if<ItemAtPlayerPayload>(&request.payload)) {
         const ItemCatalogLookup lookup = catalogs.item(itemAtPlayer->itemType);
+        lookupResult = lookup.result;
+        index = lookup.entry.id.index;
+    } else if (const auto* moonTravel = std::get_if<MoonTravelPayload>(&request.payload)) {
+        const MoonCatalogLookup lookup = catalogs.moon(moonTravel->moon);
         lookupResult = lookup.result;
         index = lookup.entry.id.index;
     } else {

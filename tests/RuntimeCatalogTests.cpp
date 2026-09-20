@@ -694,6 +694,56 @@ void testUnchangedIdentityAndAllocation(TestRun& run) {
                "the final measured activity transaction publishes its exact count");
 }
 
+void testMoonCatalog(TestRun& run) {
+    gCatalogs.resetForSessionEnd();
+    run.expect(gCatalogs.moonAt(0).result == kue::CatalogLookupResult::NoCatalog,
+               "an empty moon catalog reports no catalog");
+    run.expect(gCatalogs.beginMoonCatalog() == kue::CatalogBeginResult::Begun,
+               "a moon transaction begins");
+    run.expect(gCatalogs.beginItemCatalog() == kue::CatalogBeginResult::TransactionInProgress,
+               "an item transaction is refused while moons are staged");
+    run.expect(gCatalogs.reportItem(asset(5), name("stray")).result ==
+                   kue::CatalogReportResult::WrongTransaction,
+               "an item report is refused inside a moon transaction");
+    run.expect(gCatalogs.reportMoon(asset(41), name("41 Experimentation")).result ==
+                   kue::CatalogReportResult::Recorded,
+               "the first moon is recorded");
+    run.expect(gCatalogs.reportMoon(asset(71), name("71 Gordion")).result ==
+                   kue::CatalogReportResult::Recorded,
+               "the second moon is recorded");
+    run.expect(gCatalogs.commitMoonCatalog().result == kue::CatalogCommitResult::Committed,
+               "a moon transaction commits");
+    run.expect(gCatalogs.moonCount() == 2, "a moon commit publishes its dense size");
+    const kue::MoonCatalogLookup second = gCatalogs.moonAt(1);
+    run.expect(second.result == kue::CatalogLookupResult::Found &&
+                   second.entry.asset == asset(71) && second.entry.name == "71 Gordion" &&
+                   second.entry.id.index == 1 &&
+                   second.entry.id.generation == gCatalogs.moonGeneration(),
+               "a moon entry preserves identity, name, index, and generation");
+    run.expect(gCatalogs.moonAt(2).result == kue::CatalogLookupResult::IndexOutOfRange,
+               "the first moon index beyond the live size is rejected");
+    run.expect(gCatalogs.moon(second.entry.id).result == kue::CatalogLookupResult::Found,
+               "a current typed moon ID resolves");
+    run.expect(gCatalogs.moon(kue::MoonTypeId{kue::MoonCatalogGeneration{0}, 1U}).result ==
+                   kue::CatalogLookupResult::StaleGeneration,
+               "a stale typed moon ID is rejected");
+    const kue::PlayerActionRequest travel{kue::PlayerAction::TravelToMoon,
+                                          kue::MoonTravelPayload{second.entry.id}};
+    const kue::PlayerActionCatalogResolution resolved =
+        kue::resolvePlayerActionCatalog(travel, gCatalogs);
+    run.expect(resolved.result == kue::PlayerActionCatalogResolutionResult::Resolved &&
+                   resolved.index == 1,
+               "a moon travel action resolves its executor index");
+    run.expect(gCatalogs.enemyCount() == 0 && gCatalogs.itemCount() == 0,
+               "a moon commit leaves the other catalogs untouched");
+    gCatalogs.resetForSessionEnd();
+    run.expect(gCatalogs.moonCount() == 0 && gCatalogs.moonGeneration().value == 0,
+               "session reset clears the moon catalog");
+    run.expect(kue::resolvePlayerActionCatalog(travel, gCatalogs).result ==
+                   kue::PlayerActionCatalogResolutionResult::NoCatalog,
+               "a moon travel action cannot resolve after session reset");
+}
+
 void testSessionReset(TestRun& run) {
     gCatalogs.resetForSessionEnd();
     commitInstalledCatalogs(run);
@@ -801,6 +851,7 @@ int main() {
     testInstalledWorkloadAndActivity(run);
     testFullCapacity(run);
     testUnchangedIdentityAndAllocation(run);
+    testMoonCatalog(run);
     testSessionReset(run);
     return run.result();
 }

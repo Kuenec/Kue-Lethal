@@ -42,6 +42,12 @@ struct ItemCatalogGeneration {
     friend constexpr bool operator==(ItemCatalogGeneration, ItemCatalogGeneration) = default;
 };
 
+struct MoonCatalogGeneration {
+    std::uint64_t value = 0;
+
+    friend constexpr bool operator==(MoonCatalogGeneration, MoonCatalogGeneration) = default;
+};
+
 struct EnemyTypeId {
     EnemyCatalogGeneration generation;
     std::uint16_t index = 0;
@@ -54,6 +60,13 @@ struct ItemTypeId {
     std::uint16_t index = 0;
 
     friend constexpr bool operator==(ItemTypeId, ItemTypeId) = default;
+};
+
+struct MoonTypeId {
+    MoonCatalogGeneration generation;
+    std::uint16_t index = 0;
+
+    friend constexpr bool operator==(MoonTypeId, MoonTypeId) = default;
 };
 
 enum class CatalogBeginResult : std::uint8_t { Begun, TransactionInProgress, GenerationExhausted };
@@ -156,6 +169,12 @@ struct ItemCatalogEntry {
     std::string_view name;
 };
 
+struct MoonCatalogEntry {
+    MoonTypeId id;
+    RuntimeAssetIdentity asset;
+    std::string_view name;
+};
+
 struct EnemyCatalogLookup {
     CatalogLookupResult result = CatalogLookupResult::NoCatalog;
     EnemyCatalogEntry entry;
@@ -164,6 +183,11 @@ struct EnemyCatalogLookup {
 struct ItemCatalogLookup {
     CatalogLookupResult result = CatalogLookupResult::NoCatalog;
     ItemCatalogEntry entry;
+};
+
+struct MoonCatalogLookup {
+    CatalogLookupResult result = CatalogLookupResult::NoCatalog;
+    MoonCatalogEntry entry;
 };
 
 class RuntimeCatalogs final {
@@ -186,6 +210,12 @@ class RuntimeCatalogs final {
     [[nodiscard]] CatalogCommitOutcome commitItemCatalog() noexcept;
     [[nodiscard]] CatalogAbortResult abortItemCatalog() noexcept;
 
+    [[nodiscard]] CatalogBeginResult beginMoonCatalog() noexcept;
+    [[nodiscard]] CatalogReportOutcome reportMoon(RuntimeAssetIdentity asset,
+                                                  OrderedCatalogName name) noexcept;
+    [[nodiscard]] CatalogCommitOutcome commitMoonCatalog() noexcept;
+    [[nodiscard]] CatalogAbortResult abortMoonCatalog() noexcept;
+
     [[nodiscard]] EnemyActivityBeginResult
     beginEnemyActivity(EnemyCatalogGeneration generation) noexcept;
     [[nodiscard]] EnemyActivityReportOutcome reportEnemyActivity(EnemyTypeId id,
@@ -195,12 +225,16 @@ class RuntimeCatalogs final {
 
     [[nodiscard]] std::size_t enemyCount() const noexcept;
     [[nodiscard]] std::size_t itemCount() const noexcept;
+    [[nodiscard]] std::size_t moonCount() const noexcept;
     [[nodiscard]] EnemyCatalogGeneration enemyGeneration() const noexcept;
     [[nodiscard]] ItemCatalogGeneration itemGeneration() const noexcept;
+    [[nodiscard]] MoonCatalogGeneration moonGeneration() const noexcept;
     [[nodiscard]] EnemyCatalogLookup enemyAt(std::size_t index) const noexcept;
     [[nodiscard]] ItemCatalogLookup itemAt(std::size_t index) const noexcept;
+    [[nodiscard]] MoonCatalogLookup moonAt(std::size_t index) const noexcept;
     [[nodiscard]] EnemyCatalogLookup enemy(EnemyTypeId id) const noexcept;
     [[nodiscard]] ItemCatalogLookup item(ItemTypeId id) const noexcept;
+    [[nodiscard]] MoonCatalogLookup moon(MoonTypeId id) const noexcept;
 
     void resetForSessionEnd() noexcept;
 
@@ -227,7 +261,13 @@ class RuntimeCatalogs final {
         std::uint16_t count = 0;
     };
 
-    enum class Transaction : std::uint8_t { None, EnemyCatalog, ItemCatalog, EnemyActivity };
+    enum class Transaction : std::uint8_t {
+        None,
+        EnemyCatalog,
+        ItemCatalog,
+        MoonCatalog,
+        EnemyActivity
+    };
 
     [[nodiscard]] CatalogBeginResult beginCatalog(Transaction transaction,
                                                   std::uint64_t generation) noexcept;
@@ -248,6 +288,7 @@ class RuntimeCatalogs final {
 
     CatalogStorage mEnemies;
     CatalogStorage mItems;
+    CatalogStorage mMoons;
     CatalogStaging mStaging;
     std::array<std::uint32_t, kRuntimeCatalogCapacity> mEnemyActivity{};
     std::array<std::uint32_t, kRuntimeCatalogCapacity> mStagedEnemyActivity{};

@@ -40,7 +40,7 @@ struct ActionContract {
     std::string_view name;
 };
 
-constexpr std::array<ActionContract, 47> kActionContracts{{
+constexpr std::array<ActionContract, 48> kActionContracts{{
     {kue::PlayerAction::TeleportTo, kue::PlayerActionPayloadKind::PlayerTarget, "TeleportTo"},
     {kue::PlayerAction::Kill, kue::PlayerActionPayloadKind::PlayerTarget, "Kill"},
     {kue::PlayerAction::Heal, kue::PlayerActionPayloadKind::PlayerTarget, "Heal"},
@@ -108,9 +108,10 @@ constexpr std::array<ActionContract, 47> kActionContracts{{
     {kue::PlayerAction::AddTerminalCredits, kue::PlayerActionPayloadKind::TerminalCredits,
      "AddTerminalCredits"},
     {kue::PlayerAction::ToggleThirdPerson, kue::PlayerActionPayloadKind::None, "ToggleThirdPerson"},
+    {kue::PlayerAction::TravelToMoon, kue::PlayerActionPayloadKind::MoonTravel, "TravelToMoon"},
 }};
 
-constexpr std::array<kue::PlayerActionPayloadKind, 7> kPayloadKinds{{
+constexpr std::array<kue::PlayerActionPayloadKind, 8> kPayloadKinds{{
     kue::PlayerActionPayloadKind::None,
     kue::PlayerActionPayloadKind::PlayerTarget,
     kue::PlayerActionPayloadKind::EnemySpawn,
@@ -118,10 +119,12 @@ constexpr std::array<kue::PlayerActionPayloadKind, 7> kPayloadKinds{{
     kue::PlayerActionPayloadKind::ItemAtPlayer,
     kue::PlayerActionPayloadKind::PlushieInterval,
     kue::PlayerActionPayloadKind::TerminalCredits,
+    kue::PlayerActionPayloadKind::MoonTravel,
 }};
 
 constexpr kue::EnemyTypeId kEnemyType{{7U}, 3U};
 constexpr kue::ItemTypeId kItemType{{11U}, 3U};
+constexpr kue::MoonTypeId kMoonType{{13U}, 2U};
 
 std::array<kue::PlayerActionPayload, kPayloadKinds.size()> payloadFixtures() {
     return {{
@@ -132,6 +135,7 @@ std::array<kue::PlayerActionPayload, kPayloadKinds.size()> payloadFixtures() {
         kue::ItemAtPlayerPayload{kItemType, 2U, 17U},
         kue::PlushieIntervalPayload{std::chrono::milliseconds{250}},
         kue::TerminalCreditsPayload{2500},
+        kue::MoonTravelPayload{kMoonType},
     }};
 }
 
@@ -259,6 +263,19 @@ void testPayloadBoundaries(TestRun& run) {
                     kue::TerminalCreditsPayload{kue::kMaximumTerminalCreditsPerAction}}) == Valid,
                "AddTerminalCredits", "the maximum credit amount is accepted");
     run.expect(kue::validatePlayerActionRequest(
+                   {kue::PlayerAction::TravelToMoon, kue::MoonTravelPayload{{{}, 0U}}}) ==
+                   InvalidPayload,
+               "TravelToMoon", "a zero moon catalog generation must be rejected");
+    run.expect(kue::validatePlayerActionRequest(
+                   {kue::PlayerAction::TravelToMoon,
+                    kue::MoonTravelPayload{{{13U}, static_cast<std::uint16_t>(
+                                                       kue::kRuntimeCatalogCapacity)}}}) ==
+                   InvalidPayload,
+               "TravelToMoon", "an out-of-range moon index must be rejected");
+    run.expect(kue::validatePlayerActionRequest(
+                   {kue::PlayerAction::TravelToMoon, kue::MoonTravelPayload{kMoonType}}) == Valid,
+               "TravelToMoon", "a generation-bearing moon selection is accepted");
+    run.expect(kue::validatePlayerActionRequest(
                    {kue::PlayerAction::Kill,
                     kue::PlayerTargetPayload{std::numeric_limits<std::uint64_t>::max()}}) == Valid,
                "Kill", "the exact network client ID width must be preserved");
@@ -269,8 +286,9 @@ static_assert(!std::is_constructible_v<kue::PlayerActionRequest, kue::PlayerActi
 static_assert(std::is_same_v<decltype(kue::EnemySpawnPayload::enemyType), kue::EnemyTypeId>);
 static_assert(std::is_same_v<decltype(kue::EnemyAtPlayerPayload::enemyType), kue::EnemyTypeId>);
 static_assert(std::is_same_v<decltype(kue::ItemAtPlayerPayload::itemType), kue::ItemTypeId>);
+static_assert(std::is_same_v<decltype(kue::MoonTravelPayload::moon), kue::MoonTypeId>);
 static_assert(std::variant_size_v<kue::PlayerActionPayload> == kPayloadKinds.size());
-static_assert(static_cast<std::size_t>(kue::PlayerAction::ToggleThirdPerson) ==
+static_assert(static_cast<std::size_t>(kue::PlayerAction::TravelToMoon) ==
               kActionContracts.size());
 
 }
