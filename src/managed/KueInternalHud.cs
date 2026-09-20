@@ -352,9 +352,9 @@ namespace Kue.Internal
         private Camera thirdPersonCamera;
         private Vector3 thirdPersonRestorePosition;
         private bool thirdPersonCameraMoved;
-        private const float ThirdPersonDistance = 2.6f;
-        private const float ThirdPersonHeight = 0.35f;
-        private const float ThirdPersonSide = 0.45f;
+        private const float ThirdPersonDistance = 4.5f;
+        private const float ThirdPersonHeight = 1.1f;
+        private const float ThirdPersonSide = 0.7f;
         private bool shipHornEnabled;
         private bool carHornEnabled;
         private bool terminalSpamEnabled;
