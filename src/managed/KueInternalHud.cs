@@ -2976,9 +2976,6 @@ namespace Kue.Internal
             bool showNames = Flag(6);
             bool showValues = Flag(7);
             bool showDistance = Flag(8);
-            Matrix4x4 viewProjection = drawOutlines
-                                           ? camera.projectionMatrix * camera.worldToCameraMatrix
-                                           : Matrix4x4.zero;
             Transform cameraTransform = camera.transform;
             Vector3 cameraPosition = cameraTransform.position;
             Vector3 cameraForward = cameraTransform.forward;
@@ -3007,7 +3004,7 @@ namespace Kue.Internal
                     if (mark.portal)
                         DrawPortalOutline(camera, mark, drawColor);
                     else
-                        DrawMeshSilhouette(viewProjection, mark, drawColor);
+                        DrawMeshSilhouette(camera, mark, drawColor);
                 }
                 Vector3 labelWorld = mark.portal ? world + Vector3.up * 2.9f : world;
                 Vector3 viewport = camera.WorldToViewportPoint(labelWorld);
@@ -3088,25 +3085,23 @@ namespace Kue.Internal
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private void ProjectVertex(Vector3 vertex, Matrix4x4 localToWorld, Matrix4x4 viewProjection,
+        private void ProjectVertex(Vector3 vertex, Matrix4x4 localToWorld, Camera camera,
                                    Vector3 markerPosition, float radiusSquared, bool limitRadius,
                                    float screenWidth, float screenHeight)
         {
             Vector3 world = localToWorld.MultiplyPoint3x4(vertex);
             if (limitRadius && (world - markerPosition).sqrMagnitude > radiusSquared)
                 return;
-            Vector4 clip = viewProjection * new Vector4(world.x, world.y, world.z, 1f);
-            if (!Finite(clip.x) || !Finite(clip.y) || !Finite(clip.w) || clip.w <= 0.01f)
+            Vector3 viewport = camera.WorldToViewportPoint(world);
+            if (!Finite(viewport.x) || !Finite(viewport.y) || !Finite(viewport.z) ||
+                viewport.z <= 0.01f || viewport.x < -1f || viewport.x > 2f || viewport.y < -1f ||
+                viewport.y > 2f)
                 return;
-            float nx = clip.x / clip.w;
-            float ny = clip.y / clip.w;
-            if (!Finite(nx) || !Finite(ny) || nx < -2f || nx > 2f || ny < -2f || ny > 2f)
-                return;
-            projectedVertices.Add(new Vector2((nx * 0.5f + 0.5f) * screenWidth,
-                                              (1f - (ny * 0.5f + 0.5f)) * screenHeight));
+            projectedVertices.Add(
+                new Vector2(viewport.x * screenWidth, (1f - viewport.y) * screenHeight));
         }
 
-        private void DrawMeshSilhouette(Matrix4x4 viewProjection, Mark mark, Color color)
+        private void DrawMeshSilhouette(Camera camera, Mark mark, Color color)
         {
             if (mark.renderers == null)
                 return;
@@ -3126,9 +3121,8 @@ namespace Kue.Internal
                 if (limitRadius && (bounds.extents.sqrMagnitude > radiusSquared ||
                                     (bounds.center - markerPosition).sqrMagnitude > radiusSquared))
                     continue;
+                Matrix4x4 localToWorld = renderer.localToWorldMatrix;
                 SkinnedMeshRenderer skinned = renderer as SkinnedMeshRenderer;
-                Matrix4x4 localToWorld = skinned != null ? skinned.transform.localToWorldMatrix
-                                                         : renderer.localToWorldMatrix;
                 if (skinned != null)
                 {
                     if (skinned.sharedMesh == null)
@@ -3138,7 +3132,7 @@ namespace Kue.Internal
                     bakedMesh.GetVertices(meshVertices);
                     int step = Mathf.Max(1, meshVertices.Count / 256);
                     for (int i = 0; i < meshVertices.Count; i += step)
-                        ProjectVertex(meshVertices[i], localToWorld, viewProjection, markerPosition,
+                        ProjectVertex(meshVertices[i], localToWorld, camera, markerPosition,
                                       radiusSquared, limitRadius, screenWidth, screenHeight);
                 }
                 else
@@ -3148,7 +3142,7 @@ namespace Kue.Internal
                         continue;
                     int step = Mathf.Max(1, vertices.Length / 256);
                     for (int i = 0; i < vertices.Length; i += step)
-                        ProjectVertex(vertices[i], localToWorld, viewProjection, markerPosition,
+                        ProjectVertex(vertices[i], localToWorld, camera, markerPosition,
                                       radiusSquared, limitRadius, screenWidth, screenHeight);
                 }
             }
