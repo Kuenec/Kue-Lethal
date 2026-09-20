@@ -105,6 +105,8 @@ references=(
     UnityEngine.TextRenderingModule.dll
     Unity.InputSystem.dll
     UnityEngine.UI.dll
+    Unity.RenderPipelines.Core.Runtime.dll
+    Unity.RenderPipelines.HighDefinition.Runtime.dll
 )
 for reference in "${references[@]}"; do
     if [[ ! -f "$managed/$reference" ]]; then

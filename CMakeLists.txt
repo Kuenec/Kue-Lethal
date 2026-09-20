@@ -462,6 +462,8 @@ if(KUE_BUILD_MODULE)
     UnityEngine.TextRenderingModule.dll
     Unity.InputSystem.dll
     UnityEngine.UI.dll
+    Unity.RenderPipelines.Core.Runtime.dll
+    Unity.RenderPipelines.HighDefinition.Runtime.dll
   )
   if(NOT KUE_GAME_MANAGED_DIR)
     message(FATAL_ERROR

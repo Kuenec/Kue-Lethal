@@ -9,6 +9,7 @@ using UnityEngine;
 using UnityEngine.AI;
 using UnityEngine.InputSystem;
 using UnityEngine.Rendering;
+using UnityEngine.Rendering.HighDefinition;
 using UnityEngine.UI;
 
 namespace Kue.Internal
@@ -196,6 +197,24 @@ namespace Kue.Internal
             public int labelFlags = -1;
         }
 
+        private sealed class ModelHighlightPass : CustomPass
+        {
+            public KueHud owner;
+
+            protected override void Execute(CustomPassContext context)
+            {
+                if (owner != null)
+                    owner.ExecuteModelHighlight(context);
+            }
+        }
+
+        private struct HighlightDraw
+        {
+            public Renderer renderer;
+            public Material material;
+            public int submeshCount;
+        }
+
         private sealed class RendererCacheEntry
         {
             public Component owner;
@@ -296,6 +315,14 @@ namespace Kue.Internal
         private int markCount;
 
         private readonly Color[] outlineColors = new Color[6];
+        private readonly List<HighlightDraw> highlightDraws = new List<HighlightDraw>();
+        private readonly Dictionary<Color, Material> highlightMaterials =
+            new Dictionary<Color, Material>();
+        private CustomPassVolume highlightVolume;
+        private Shader highlightShader;
+        private bool highlightUnavailable;
+        private int highlightPassIndex = -1;
+        private const float HighlightFillAlpha = 0.38f;
         private Texture2D menuTexture;
         private ulong uploadedMenuPixelRevision;
         private Texture2D lineTexture;
@@ -445,6 +472,12 @@ namespace Kue.Internal
             uploadedMenuPixelRevision = 0;
             if (lineTexture != null)
                 Destroy(lineTexture);
+            if (highlightVolume != null)
+                Destroy(highlightVolume);
+            foreach (KeyValuePair<Color, Material> pair in highlightMaterials)
+                if (pair.Value != null)
+                    Destroy(pair.Value);
+            highlightMaterials.Clear();
             QualitySettings.vSyncCount = capturedVSyncCount;
             Application.targetFrameRate = capturedTargetFrameRate;
         }
@@ -528,6 +561,149 @@ namespace Kue.Internal
             UpdatePersistentLure();
             UpdateFlappingArms();
             UpdateThirdPersonModel();
+            CollectHighlightDraws();
+        }
+
+        private bool EnsureHighlightPass()
+        {
+            if (highlightVolume != null)
+                return true;
+            if (highlightUnavailable)
+                return false;
+            try
+            {
+                highlightShader = Shader.Find("HDRP/Unlit");
+                if (highlightShader == null)
+                {
+                    highlightUnavailable = true;
+                    Debug.Log("[Kue] HDRP/Unlit shader unavailable; using hull outlines");
+                    return false;
+                }
+                highlightVolume = gameObject.AddComponent<CustomPassVolume>();
+                highlightVolume.isGlobal = true;
+                highlightVolume.injectionPoint = CustomPassInjectionPoint.AfterPostProcess;
+                highlightVolume.customPasses.Add(new ModelHighlightPass { owner = this });
+                Debug.Log("[Kue] Model highlight pass installed");
+                return true;
+            }
+            catch (Exception e)
+            {
+                DisableHighlightPass("[Kue] Model highlight pass setup failed: " + e);
+                return false;
+            }
+        }
+
+        private void DisableHighlightPass(string reason)
+        {
+            highlightUnavailable = true;
+            highlightDraws.Clear();
+            if (highlightVolume != null)
+            {
+                Destroy(highlightVolume);
+                highlightVolume = null;
+            }
+            Debug.LogError(reason);
+        }
+
+        private Material HighlightMaterial(Color color)
+        {
+            Material material;
+            if (highlightMaterials.TryGetValue(color, out material) && material != null)
+                return material;
+            material = new Material(highlightShader) { hideFlags = HideFlags.HideAndDontSave };
+            HDMaterial.SetSurfaceType(material, true);
+            material.SetInt("_ZWrite", 0);
+            material.SetInt("_ZTestTransparent", (int)CompareFunction.Always);
+            material.SetColor("_UnlitColor", new Color(color.r, color.g, color.b, HighlightFillAlpha));
+            HDMaterial.ValidateMaterial(material);
+            material.SetInt("_ZTestDepthEqualForOpaque", (int)CompareFunction.Always);
+            highlightPassIndex = material.FindPass("ForwardOnly");
+            highlightMaterials[color] = material;
+            return material;
+        }
+
+        private static int SubmeshCount(Renderer renderer)
+        {
+            SkinnedMeshRenderer skinned = renderer as SkinnedMeshRenderer;
+            if (skinned != null)
+                return skinned.sharedMesh != null ? skinned.sharedMesh.subMeshCount : 0;
+            MeshFilter filter = renderer.GetComponent<MeshFilter>();
+            return filter != null && filter.sharedMesh != null ? filter.sharedMesh.subMeshCount : 0;
+        }
+
+        private void CollectHighlightDraws()
+        {
+            highlightDraws.Clear();
+            if ((espFlags & 0x3f) == 0 || !Flag(9) || !EnsureHighlightPass())
+                return;
+            PlayerControllerB local = LocalPlayer();
+            Camera camera = GameCamera();
+            if (camera == null)
+                return;
+            Vector3 origin = local != null ? local.transform.position : camera.transform.position;
+            float maximumDistanceSquared = maxDistance * maxDistance;
+            for (int markIndex = 0; markIndex < markCount; markIndex++)
+            {
+                Mark mark = marks[markIndex];
+                if (!mark.enabled || mark.marker == null || mark.portal || mark.renderers == null ||
+                    !MarkStillVisible(mark))
+                    continue;
+                Vector3 markerPosition = mark.marker.position;
+                if ((origin - markerPosition).sqrMagnitude > maximumDistanceSquared)
+                    continue;
+                Color drawColor = mark.color;
+                drawColor.a = 1f;
+                Material material = HighlightMaterial(drawColor);
+                float radiusSquared = mark.rendererRadius * mark.rendererRadius;
+                bool limitRadius = mark.kind != MarkKind.Player && mark.rendererRadius > 0f;
+                int rendererLimit = mark.kind == MarkKind.Player ? 1 : mark.renderers.Length;
+                for (int i = 0; i < mark.renderers.Length && i < rendererLimit; i++)
+                {
+                    Renderer renderer = mark.renderers[i];
+                    if (renderer == null || !renderer.enabled ||
+                        (!(renderer is MeshRenderer) && !(renderer is SkinnedMeshRenderer)))
+                    {
+                        if (mark.kind == MarkKind.Player)
+                            rendererLimit++;
+                        continue;
+                    }
+                    if (limitRadius)
+                    {
+                        Bounds bounds = renderer.bounds;
+                        if (bounds.extents.sqrMagnitude > radiusSquared ||
+                            (bounds.center - markerPosition).sqrMagnitude > radiusSquared)
+                            continue;
+                    }
+                    int submeshCount = SubmeshCount(renderer);
+                    if (submeshCount <= 0)
+                        continue;
+                    highlightDraws.Add(new HighlightDraw { renderer = renderer, material = material,
+                                                           submeshCount = submeshCount });
+                }
+            }
+        }
+
+        private void ExecuteModelHighlight(CustomPassContext context)
+        {
+            if (highlightDraws.Count == 0 || highlightPassIndex < 0 || context.hdCamera == null ||
+                context.hdCamera.camera != activeCamera)
+                return;
+            try
+            {
+                for (int i = 0; i < highlightDraws.Count; i++)
+                {
+                    HighlightDraw draw = highlightDraws[i];
+                    if (draw.renderer == null || draw.material == null)
+                        continue;
+                    for (int submesh = 0; submesh < draw.submeshCount; submesh++)
+                        context.cmd.DrawRenderer(draw.renderer, draw.material, submesh,
+                                                 highlightPassIndex);
+                }
+            }
+            catch (Exception e)
+            {
+                DisableHighlightPass("[Kue] Model highlight draw failed: " + e);
+            }
         }
 
         private void ApplyLocalPlayerFeatures()
@@ -2977,7 +3153,8 @@ namespace Kue.Internal
             Camera camera = GameCamera();
             if (camera == null)
                 return;
-            bool drawOutlines = Flag(9);
+            bool drawOutlines = Flag(9) && highlightVolume == null;
+            bool drawPortalOutlines = Flag(9);
             bool drawLines = Flag(10);
             bool showNames = Flag(6);
             bool showValues = Flag(7);
@@ -3005,13 +3182,13 @@ namespace Kue.Internal
                     continue;
                 Color drawColor = mark.color;
                 drawColor.a = 1f;
-                if (drawOutlines)
+                if (mark.portal)
                 {
-                    if (mark.portal)
+                    if (drawPortalOutlines)
                         DrawPortalOutline(camera, mark, drawColor);
-                    else
-                        DrawMeshSilhouette(camera, mark, drawColor);
                 }
+                else if (drawOutlines)
+                    DrawMeshSilhouette(camera, mark, drawColor);
                 Vector3 labelWorld = mark.portal ? world + Vector3.up * 2.9f : world;
                 Vector3 viewport = camera.WorldToViewportPoint(labelWorld);
                 if (viewport.z <= 0.01f || viewport.x < 0f || viewport.x > 1f || viewport.y < 0f ||
