@@ -326,16 +326,18 @@ namespace Kue.Internal
         private Material highlightRingMaterial;
         private RTHandle highlightMask;
         private RTHandle highlightBlur;
-        private RTHandle highlightTemp;
+
         private Mesh highlightQuad;
         private readonly List<Vector3> highlightQuadVertices = new List<Vector3>(4);
-        private const float HighlightBlurRadius = 10f;
-        private const int HighlightBlurSamples = 9;
-        private const float HighlightRingIntensity = 8f;
+        private const float HighlightRingIntensity = 1.5f;
         private const int HighlightAdditiveBlendMode = 1;
         private const int HighlightPremultipliedBlendMode = 4;
         private Material highlightCutoutMaterial;
         private bool highlightResourcesLogged;
+        private Material highlightStampMaterial;
+        private MaterialPropertyBlock highlightStampProperties;
+        private const int HighlightRingTaps = 16;
+        private const float HighlightRingRadiusPixels = 3f;
         private Texture2D menuTexture;
         private ulong uploadedMenuPixelRevision;
         private Texture2D lineTexture;
@@ -493,6 +495,8 @@ namespace Kue.Internal
             highlightMaterials.Clear();
             if (highlightCutoutMaterial != null)
                 Destroy(highlightCutoutMaterial);
+            if (highlightStampMaterial != null)
+                Destroy(highlightStampMaterial);
             if (highlightRingMaterial != null)
                 Destroy(highlightRingMaterial);
             if (highlightQuad != null)
@@ -501,8 +505,6 @@ namespace Kue.Internal
                 RTHandles.Release(highlightMask);
             if (highlightBlur != null)
                 RTHandles.Release(highlightBlur);
-            if (highlightTemp != null)
-                RTHandles.Release(highlightTemp);
             QualitySettings.vSyncCount = capturedVSyncCount;
             Application.targetFrameRate = capturedTargetFrameRate;
         }
@@ -667,10 +669,9 @@ namespace Kue.Internal
                                             filterMode: FilterMode.Bilinear,
                                             wrapMode: TextureWrapMode.Clamp,
                                             name: "KueHighlightBlur");
-            highlightTemp = RTHandles.Alloc(Vector2.one, colorFormat: GraphicsFormat.R8G8B8A8_UNorm,
-                                            filterMode: FilterMode.Bilinear,
-                                            wrapMode: TextureWrapMode.Clamp,
-                                            name: "KueHighlightTemp");
+            highlightStampMaterial =
+                ScreenQuadMaterial(highlightMask.rt, Color.white, HighlightAdditiveBlendMode);
+            highlightStampProperties = new MaterialPropertyBlock();
             highlightCutoutMaterial = ScreenQuadMaterial(highlightMask.rt, new Color(0f, 0f, 0f, 1f),
                                                          HighlightPremultipliedBlendMode);
             highlightRingMaterial = ScreenQuadMaterial(
@@ -698,6 +699,29 @@ namespace Kue.Internal
             Vector4 scale = RTHandles.rtHandleProperties.rtHandleScale;
             highlightRingMaterial.SetTextureScale("_UnlitColorMap", new Vector2(scale.x, scale.y));
             highlightCutoutMaterial.SetTextureScale("_UnlitColorMap", new Vector2(scale.x, scale.y));
+            highlightStampMaterial.SetTextureScale("_UnlitColorMap", new Vector2(scale.x, scale.y));
+        }
+
+        private void StampHighlightRing(CommandBuffer cmd)
+        {
+            Vector4 scale = RTHandles.rtHandleProperties.rtHandleScale;
+            Vector2Int viewport = RTHandles.rtHandleProperties.currentViewportSize;
+            float stepX = viewport.x > 0 ? scale.x / viewport.x : 0f;
+            float stepY = viewport.y > 0 ? scale.y / viewport.y : 0f;
+            for (int ring = 1; ring <= 2; ring++)
+            {
+                float radius = HighlightRingRadiusPixels * ring * 0.5f;
+                for (int tap = 0; tap < HighlightRingTaps; tap++)
+                {
+                    float angle = tap * (Mathf.PI * 2f / HighlightRingTaps);
+                    highlightStampProperties.SetVector(
+                        "_UnlitColorMap_ST",
+                        new Vector4(scale.x, scale.y, Mathf.Cos(angle) * radius * stepX,
+                                    Mathf.Sin(angle) * radius * stepY));
+                    cmd.DrawMesh(highlightQuad, Matrix4x4.identity, highlightStampMaterial, 0,
+                                 highlightPassIndex, highlightStampProperties);
+                }
+            }
         }
 
         private Material ScreenQuadMaterial(Texture source, Color color, int blendMode)
@@ -805,9 +829,8 @@ namespace Kue.Internal
                 UpdateHighlightQuad(context.hdCamera.camera);
                 CoreUtils.SetRenderTarget(cmd, highlightMask, ClearFlag.Color, Color.clear);
                 DrawHighlightModels(cmd);
-                CustomPassUtils.GaussianBlur(context, highlightMask, highlightBlur, highlightTemp,
-                                             HighlightBlurSamples, HighlightBlurRadius, 0, 0, false);
-                CoreUtils.SetRenderTarget(cmd, highlightBlur);
+                CoreUtils.SetRenderTarget(cmd, highlightBlur, ClearFlag.Color, Color.clear);
+                StampHighlightRing(cmd);
                 cmd.DrawMesh(highlightQuad, Matrix4x4.identity, highlightCutoutMaterial, 0,
                              highlightPassIndex);
                 CoreUtils.SetRenderTarget(cmd, context.cameraColorBuffer,
