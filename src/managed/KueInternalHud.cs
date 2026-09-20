@@ -274,7 +274,6 @@ namespace Kue.Internal
         private const float MinimumLocalDeathRoundTime = 2f;
 
         private readonly List<Mark> marks = new List<Mark>();
-        private readonly List<Vector3> meshVertices = new List<Vector3>(1024);
         private readonly List<Vector2> projectedVertices = new List<Vector2>(1024);
         private readonly List<Vector2> hullVertices = new List<Vector2>(1024);
         private readonly Vector3[] portalWorldCorners = new Vector3[4];
@@ -297,7 +296,6 @@ namespace Kue.Internal
         private int markCount;
 
         private readonly Color[] outlineColors = new Color[6];
-        private Mesh bakedMesh;
         private Texture2D menuTexture;
         private ulong uploadedMenuPixelRevision;
         private Texture2D lineTexture;
@@ -352,6 +350,7 @@ namespace Kue.Internal
         private Camera thirdPersonCamera;
         private Vector3 thirdPersonAppliedOffset;
         private bool thirdPersonOffsetApplied;
+        private const float BoneOutlineRadius = 0.14f;
         private const float ThirdPersonDistance = 4.5f;
         private const float ThirdPersonHeight = 1.1f;
         private const float ThirdPersonSide = 0.7f;
@@ -417,8 +416,6 @@ namespace Kue.Internal
             lineTexture.SetPixel(0, 0, Color.white);
             lineTexture.Apply();
             lineTexture.hideFlags = HideFlags.HideAndDontSave;
-            bakedMesh = new Mesh();
-            bakedMesh.hideFlags = HideFlags.HideAndDontSave;
             DontDestroyOnLoad(gameObject);
             Debug.Log("[Kue] Internal HUD Awake");
             Debug.Log("[Kue] Frame pacing set to uncapped (vSync=0, targetFrameRate=-1)");
@@ -448,8 +445,6 @@ namespace Kue.Internal
             uploadedMenuPixelRevision = 0;
             if (lineTexture != null)
                 Destroy(lineTexture);
-            if (bakedMesh != null)
-                Destroy(bakedMesh);
             QualitySettings.vSyncCount = capturedVSyncCount;
             Application.targetFrameRate = capturedTargetFrameRate;
         }
@@ -3100,7 +3095,14 @@ namespace Kue.Internal
                                    Vector3 markerPosition, float radiusSquared, bool limitRadius,
                                    float screenWidth, float screenHeight)
         {
-            Vector3 world = localToWorld.MultiplyPoint3x4(vertex);
+            ProjectWorldPoint(localToWorld.MultiplyPoint3x4(vertex), camera, markerPosition,
+                              radiusSquared, limitRadius, screenWidth, screenHeight);
+        }
+
+        private void ProjectWorldPoint(Vector3 world, Camera camera, Vector3 markerPosition,
+                                       float radiusSquared, bool limitRadius, float screenWidth,
+                                       float screenHeight)
+        {
             if (limitRadius && (world - markerPosition).sqrMagnitude > radiusSquared)
                 return;
             Vector3 viewport = camera.WorldToViewportPoint(world);
@@ -3120,6 +3122,7 @@ namespace Kue.Internal
             Vector3 markerPosition = mark.marker.position;
             float radiusSquared = mark.rendererRadius * mark.rendererRadius;
             bool limitRadius = mark.rendererRadius > 0f;
+            bool skeletonProjected = false;
             float screenWidth = Screen.width;
             float screenHeight = Screen.height;
             foreach (Renderer renderer in mark.renderers)
@@ -3136,15 +3139,30 @@ namespace Kue.Internal
                 SkinnedMeshRenderer skinned = renderer as SkinnedMeshRenderer;
                 if (skinned != null)
                 {
-                    if (skinned.sharedMesh == null)
+                    if (skeletonProjected)
                         continue;
-                    skinned.BakeMesh(bakedMesh);
-                    meshVertices.Clear();
-                    bakedMesh.GetVertices(meshVertices);
-                    int step = Mathf.Max(1, meshVertices.Count / 256);
-                    for (int i = 0; i < meshVertices.Count; i += step)
-                        ProjectVertex(meshVertices[i], localToWorld, camera, markerPosition,
-                                      radiusSquared, limitRadius, screenWidth, screenHeight);
+                    Transform[] bones = skinned.bones;
+                    if (bones == null || bones.Length == 0)
+                        continue;
+                    skeletonProjected = true;
+                    Transform cameraTransform = camera.transform;
+                    Vector3 right = cameraTransform.right * BoneOutlineRadius;
+                    Vector3 up = cameraTransform.up * BoneOutlineRadius;
+                    for (int i = 0; i < bones.Length; i++)
+                    {
+                        Transform bone = bones[i];
+                        if (bone == null)
+                            continue;
+                        Vector3 world = bone.position;
+                        ProjectWorldPoint(world + right, camera, markerPosition, radiusSquared,
+                                          limitRadius, screenWidth, screenHeight);
+                        ProjectWorldPoint(world - right, camera, markerPosition, radiusSquared,
+                                          limitRadius, screenWidth, screenHeight);
+                        ProjectWorldPoint(world + up, camera, markerPosition, radiusSquared,
+                                          limitRadius, screenWidth, screenHeight);
+                        ProjectWorldPoint(world - up, camera, markerPosition, radiusSquared,
+                                          limitRadius, screenWidth, screenHeight);
+                    }
                 }
                 else
                 {
