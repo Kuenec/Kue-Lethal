@@ -815,8 +815,10 @@ void Interface::drawMoonsTab(const MenuSnapshot& snapshot, const RuntimeCatalogs
             queueAction({PlayerAction::TravelToMoon, MoonTravelPayload{chosenMoon.entry.id}});
         ImGui::TextWrapped("Free of charge. The ship must be in orbit and not already "
                            "travelling. Every moon the game knows is listed, including ones "
-                           "the terminal hides; unlisted assets show as such and cannot be "
-                           "routed to.");
+                           "the terminal hides. A moon marked (no map) has no terrain in the "
+                           "game files and lands on Artifice's map with its own settings. A "
+                           "moon marked (unlisted) only works as host with nobody else "
+                           "connected.");
     } else {
         ImGui::TextColored(ImVec4(0.48f, 0.48f, 0.52f, 1.f), "No catalog yet");
     }

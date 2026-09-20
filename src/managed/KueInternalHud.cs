@@ -11,6 +11,7 @@ using UnityEngine.Experimental.Rendering;
 using UnityEngine.InputSystem;
 using UnityEngine.Rendering;
 using UnityEngine.Rendering.HighDefinition;
+using UnityEngine.SceneManagement;
 using UnityEngine.UI;
 
 namespace Kue.Internal
@@ -314,6 +315,7 @@ namespace Kue.Internal
         private readonly List<Item> itemCatalogBuffer = new List<Item>();
         private readonly List<SelectableLevel> moonCatalogBuffer = new List<SelectableLevel>();
         private readonly List<int> moonLevelBuffer = new List<int>();
+        private readonly List<bool> moonSceneBuffer = new List<bool>();
         private readonly HashSet<int> catalogInstanceIds = new HashSet<int>();
         private readonly HashSet<string> usedCatalogNames = new HashSet<string>();
         private readonly Dictionary<EnemyType, int> enemyCatalogIndices =
@@ -388,6 +390,9 @@ namespace Kue.Internal
         private readonly List<Item> itemCatalog = new List<Item>();
         private readonly List<SelectableLevel> moonCatalog = new List<SelectableLevel>();
         private readonly List<int> moonLevelIndices = new List<int>();
+        private readonly List<bool> moonHasScene = new List<bool>();
+        private int swappedLevelSlot = -1;
+        private SelectableLevel swappedOriginalLevel;
         private StartOfRound catalogRound;
         private bool enemyCatalogReady;
         private bool itemCatalogReady;
@@ -1553,10 +1558,55 @@ namespace Kue.Internal
             return candidate;
         }
 
-        private static string MoonName(SelectableLevel level, bool unlisted)
+        private static string MoonName(SelectableLevel level, bool unlisted, bool hasScene)
         {
             string name = string.IsNullOrEmpty(level.PlanetName) ? level.name : level.PlanetName;
-            return unlisted ? name + " (unlisted)" : name;
+            if (unlisted)
+                name += " (unlisted)";
+            if (!hasScene)
+                name += " (no map)";
+            return name;
+        }
+
+        private static bool SceneInBuild(string sceneName)
+        {
+            if (string.IsNullOrEmpty(sceneName))
+                return false;
+            try
+            {
+                return SceneUtility.GetBuildIndexByScenePath(sceneName) >= 0 ||
+                       SceneUtility.GetBuildIndexByScenePath("Assets/Scenes/" + sceneName +
+                                                             ".unity") >= 0;
+            }
+            catch (Exception)
+            {
+                return false;
+            }
+        }
+
+        private void RestoreSwappedLevel(StartOfRound round)
+        {
+            if (swappedLevelSlot >= 0 && round.levels != null &&
+                swappedLevelSlot < round.levels.Length && swappedOriginalLevel != null)
+                round.levels[swappedLevelSlot] = swappedOriginalLevel;
+            swappedLevelSlot = -1;
+            swappedOriginalLevel = null;
+        }
+
+        private SelectableLevel StandInMoon(SelectableLevel level)
+        {
+            SelectableLevel fallback = null;
+            for (int i = 0; i < moonCatalog.Count; i++)
+            {
+                SelectableLevel candidate = moonCatalog[i];
+                if (candidate == level || !moonHasScene[i] || moonLevelIndices[i] < 0)
+                    continue;
+                if (candidate.name == "ArtificeLevel")
+                    return candidate;
+                if (fallback == null)
+                    fallback = candidate;
+            }
+            return fallback;
         }
 
         private void RefreshMoonCatalog()
@@ -1566,10 +1616,12 @@ namespace Kue.Internal
             StartOfRound round = StartOfRound.Instance;
             if (round == null || round.levels == null)
                 return;
+            RestoreSwappedLevel(round);
             SelectableLevel[] loaded = Resources.FindObjectsOfTypeAll<SelectableLevel>();
             moonCatalogSignature = MoonCatalogSignature(round, loaded.Length);
             moonCatalogBuffer.Clear();
             moonLevelBuffer.Clear();
+            moonSceneBuffer.Clear();
             catalogInstanceIds.Clear();
             for (int i = 0; i < round.levels.Length; i++)
             {
@@ -1578,6 +1630,7 @@ namespace Kue.Internal
                     continue;
                 moonCatalogBuffer.Add(level);
                 moonLevelBuffer.Add(i);
+                moonSceneBuffer.Add(SceneInBuild(level.sceneName));
             }
             int routable = moonCatalogBuffer.Count;
             foreach (SelectableLevel level in loaded)
@@ -1586,6 +1639,7 @@ namespace Kue.Internal
                     continue;
                 moonCatalogBuffer.Add(level);
                 moonLevelBuffer.Add(-1);
+                moonSceneBuffer.Add(SceneInBuild(level.sceneName));
             }
             if (moonCatalogBuffer.Count == 0)
                 return;
@@ -1599,7 +1653,8 @@ namespace Kue.Internal
             for (int i = 0; i < moonCatalogBuffer.Count; i++)
             {
                 SelectableLevel level = moonCatalogBuffer[i];
-                string name = UniqueCatalogName(MoonName(level, moonLevelBuffer[i] < 0));
+                string name = UniqueCatalogName(
+                    MoonName(level, moonLevelBuffer[i] < 0, moonSceneBuffer[i]));
                 CatalogReportResult report =
                     NativeBridge.ReportMoonType(level.GetInstanceID(), name);
                 if (report != CatalogReportResult.Recorded)
@@ -1621,6 +1676,8 @@ namespace Kue.Internal
             moonCatalog.AddRange(moonCatalogBuffer);
             moonLevelIndices.Clear();
             moonLevelIndices.AddRange(moonLevelBuffer);
+            moonHasScene.Clear();
+            moonHasScene.AddRange(moonSceneBuffer);
             moonCatalogReady = true;
             Debug.Log("[Kue] Runtime moon catalog: " + moonCatalog.Count + " moons, " + routable +
                       " routable");
@@ -1629,19 +1686,17 @@ namespace Kue.Internal
         private void TravelToMoonManaged(int index)
         {
             StartOfRound round = StartOfRound.Instance;
-            if (round == null || index < 0 || index >= moonCatalog.Count)
+            PlayerControllerB local = LocalPlayer();
+            if (round == null || local == null || round.levels == null || index < 0 ||
+                index >= moonCatalog.Count)
             {
                 ReportActionFailure("Moon travel failed: catalog entry unavailable");
                 return;
             }
             SelectableLevel level = moonCatalog[index];
             int levelIndex = moonLevelIndices[index];
-            string name = MoonName(level, levelIndex < 0);
-            if (levelIndex < 0)
-            {
-                ReportActionFailure("Moon travel failed: the ship has no route to " + name);
-                return;
-            }
+            bool hasScene = moonHasScene[index];
+            string name = MoonName(level, levelIndex < 0, hasScene);
             if (!round.inShipPhase)
             {
                 ReportActionFailure("Moon travel failed: the ship must be in orbit");
@@ -1658,10 +1713,37 @@ namespace Kue.Internal
                 ReportActionFailure("Moon travel failed: terminal unavailable");
                 return;
             }
+            RestoreSwappedLevel(round);
+            string detail = "";
+            if (!hasScene)
+            {
+                SelectableLevel standIn = StandInMoon(level);
+                if (standIn == null)
+                {
+                    ReportActionFailure("Moon travel failed: no moon with a map to borrow");
+                    return;
+                }
+                level.sceneName = standIn.sceneName;
+                detail = " on the map of " + MoonName(standIn, false, true);
+            }
+            if (levelIndex < 0)
+            {
+                if (!local.IsHost || round.connectedPlayersAmount > 0)
+                {
+                    ReportActionFailure("Moon travel failed: " + name +
+                                        " needs you to be host with nobody else connected");
+                    return;
+                }
+                int slot = Mathf.Clamp(round.currentLevelID, 0, round.levels.Length - 1);
+                swappedOriginalLevel = round.levels[slot];
+                round.levels[slot] = level;
+                swappedLevelSlot = slot;
+                levelIndex = slot;
+            }
             round.ChangeLevelServerRpc(levelIndex, terminal.groupCredits);
-            Debug.Log("[Kue] Routing the ship to " + name + " (level " + levelIndex + ")");
+            Debug.Log("[Kue] Routing the ship to " + name + " (level " + levelIndex + ")" + detail);
             if (HUDManager.Instance != null)
-                HUDManager.Instance.DisplayTip("Kue", "Routing to " + name);
+                HUDManager.Instance.DisplayTip("Kue", "Routing to " + name + detail);
         }
 
         private static int ItemCatalogSignature(StartOfRound round, int loadedCount)
@@ -1690,6 +1772,9 @@ namespace Kue.Internal
             itemCatalog.Clear();
             moonCatalog.Clear();
             moonLevelIndices.Clear();
+            moonHasScene.Clear();
+            swappedLevelSlot = -1;
+            swappedOriginalLevel = null;
             enemyCatalogIndices.Clear();
             enemyCatalogNames.Clear();
             activeEnemyCounts = new int[0];
