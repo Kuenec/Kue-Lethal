@@ -334,8 +334,7 @@ namespace Kue.Internal
         private Vector3 highlightPixelRight;
         private Vector3 highlightPixelUp;
         private bool highlightResourcesLogged;
-        private float highlightDumpAt = -1f;
-        private bool highlightDumped;
+        private Shader highlightCutoutShader;
         private const int HighlightRingTaps = 16;
         private const float HighlightRingRadiusPixels = 3f;
         private Texture2D menuTexture;
@@ -586,7 +585,6 @@ namespace Kue.Internal
             UpdateFlappingArms();
             UpdateThirdPersonModel();
             CollectHighlightDraws();
-            DumpHighlightBuffers();
         }
 
         private bool EnsureHighlightPass()
@@ -600,10 +598,11 @@ namespace Kue.Internal
                 highlightShader = Shader.Find("UI/Default");
                 if (highlightShader == null)
                     highlightShader = Shader.Find("Sprites/Default");
-                if (highlightShader == null)
+                highlightCutoutShader = Shader.Find("Hidden/Internal-Colored");
+                if (highlightShader == null || highlightCutoutShader == null)
                 {
                     highlightUnavailable = true;
-                    Debug.Log("[Kue] UI/Default shader unavailable; using hull outlines");
+                    Debug.Log("[Kue] Built-in outline shaders unavailable; using hull outlines");
                     return false;
                 }
                 highlightVolume = gameObject.AddComponent<CustomPassVolume>();
@@ -692,14 +691,21 @@ namespace Kue.Internal
             highlightHeight = height;
             if (highlightStampMaterial != null)
                 Destroy(highlightStampMaterial);
-            if (highlightCutoutMaterial != null)
-                Destroy(highlightCutoutMaterial);
             if (highlightRingMaterial != null)
                 Destroy(highlightRingMaterial);
             highlightStampMaterial = HighlightQuadMaterial(highlightMask.rt, Color.white);
-            highlightCutoutMaterial =
-                HighlightQuadMaterial(highlightMask.rt, new Color(0f, 0f, 0f, 1f));
             highlightRingMaterial = HighlightQuadMaterial(highlightRing.rt, Color.white);
+            if (highlightCutoutMaterial == null)
+            {
+                highlightCutoutMaterial =
+                    new Material(highlightCutoutShader) { hideFlags = HideFlags.HideAndDontSave };
+                highlightCutoutMaterial.SetColor("_Color", Color.clear);
+                highlightCutoutMaterial.SetInt("_SrcBlend", (int)BlendMode.Zero);
+                highlightCutoutMaterial.SetInt("_DstBlend", (int)BlendMode.Zero);
+                highlightCutoutMaterial.SetInt("_ZWrite", 0);
+                highlightCutoutMaterial.SetInt("_ZTest", (int)CompareFunction.Always);
+                highlightCutoutMaterial.SetInt("_Cull", (int)CullMode.Off);
+            }
             return true;
         }
 
@@ -734,58 +740,16 @@ namespace Kue.Internal
             }
         }
 
-        private void DrawHighlightModels(CommandBuffer cmd)
+        private void DrawHighlightModels(CommandBuffer cmd, Material overrideMaterial)
         {
             for (int i = 0; i < highlightDraws.Count; i++)
             {
                 HighlightDraw draw = highlightDraws[i];
-                if (draw.renderer == null || draw.material == null)
+                Material material = overrideMaterial != null ? overrideMaterial : draw.material;
+                if (draw.renderer == null || material == null)
                     continue;
                 for (int submesh = 0; submesh < draw.submeshCount; submesh++)
-                    cmd.DrawRenderer(draw.renderer, draw.material, submesh, 0);
-            }
-        }
-
-        private void DumpHighlightBuffers()
-        {
-            if (highlightDumped || highlightMask == null || highlightRing == null)
-                return;
-            if (highlightDumpAt < 0f)
-            {
-                highlightDumpAt = Time.unscaledTime + 3f;
-                return;
-            }
-            if (Time.unscaledTime < highlightDumpAt || highlightDraws.Count == 0)
-                return;
-            highlightDumped = true;
-            try
-            {
-                string directory = Application.persistentDataPath;
-                SaveRenderTexture(highlightMask.rt, System.IO.Path.Combine(directory, "kue-mask.png"));
-                SaveRenderTexture(highlightRing.rt, System.IO.Path.Combine(directory, "kue-ring.png"));
-                Debug.Log("[Kue] Model highlight buffers dumped to " + directory);
-            }
-            catch (Exception e)
-            {
-                Debug.LogError("[Kue] Model highlight buffer dump failed: " + e);
-            }
-        }
-
-        private static void SaveRenderTexture(RenderTexture source, string path)
-        {
-            RenderTexture previous = RenderTexture.active;
-            Texture2D image = new Texture2D(source.width, source.height, TextureFormat.RGBA32, false);
-            try
-            {
-                RenderTexture.active = source;
-                image.ReadPixels(new Rect(0f, 0f, source.width, source.height), 0, 0);
-                image.Apply();
-                System.IO.File.WriteAllBytes(path, ImageConversion.EncodeToPNG(image));
-            }
-            finally
-            {
-                RenderTexture.active = previous;
-                Destroy(image);
+                    cmd.DrawRenderer(draw.renderer, material, submesh, 0);
             }
         }
 
@@ -863,10 +827,10 @@ namespace Kue.Internal
                 CommandBuffer cmd = context.cmd;
                 UpdateHighlightQuad(context.hdCamera.camera);
                 CoreUtils.SetRenderTarget(cmd, highlightMask, ClearFlag.Color, Color.clear);
-                DrawHighlightModels(cmd);
+                DrawHighlightModels(cmd, null);
                 CoreUtils.SetRenderTarget(cmd, highlightRing, ClearFlag.Color, Color.clear);
                 StampHighlightRing(cmd);
-                cmd.DrawMesh(highlightQuad, Matrix4x4.identity, highlightCutoutMaterial, 0, 0);
+                DrawHighlightModels(cmd, highlightCutoutMaterial);
                 CoreUtils.SetRenderTarget(cmd, context.cameraColorBuffer);
                 cmd.DrawMesh(highlightQuad, Matrix4x4.identity, highlightRingMaterial, 0, 0);
                 if (!highlightResourcesLogged)
