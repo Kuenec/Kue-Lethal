@@ -339,8 +339,11 @@ namespace Kue.Internal
         private PlayerControllerB flyPlayer;
         private CharacterController flyController;
         private float flySpeed = 15f;
-        private const float FlapCycleSpeed = 7f;
-        private const float FlapAmplitudeDegrees = 40f;
+        private const float FlapCycleSpeed = 11f;
+        private const float FlapClimbCycleSpeed = 16f;
+        private const float FlapAmplitudeDegrees = 85f;
+        private const float FlapLiftDegrees = 25f;
+        private float flapPhase;
         private readonly List<Transform> flapBones = new List<Transform>();
         private readonly List<float> flapBoneSides = new List<float>();
         private PlayerControllerB flapPlayer;
@@ -1966,14 +1969,20 @@ namespace Kue.Internal
             }
             if (flapPlayer != flyPlayer)
                 CollectFlapBones(flyPlayer);
-            float flap = (Mathf.Sin(Time.unscaledTime * FlapCycleSpeed) * 0.5f + 0.5f) *
-                         FlapAmplitudeDegrees;
+            Keyboard keyboard = Keyboard.current;
+            bool climbing = keyboard != null && keyboard.spaceKey.isPressed;
+            flapPhase += Time.unscaledDeltaTime * (climbing ? FlapClimbCycleSpeed : FlapCycleSpeed);
+            float stroke = Mathf.Sin(flapPhase);
+            float flap = (stroke * 0.5f + 0.5f) * FlapAmplitudeDegrees;
+            float lift = Mathf.Cos(flapPhase) * FlapLiftDegrees;
             for (int i = 0; i < flapBones.Count; i++)
             {
                 Transform bone = flapBones[i];
                 if (bone == null)
                     continue;
-                bone.localRotation *= Quaternion.AngleAxis(flap * flapBoneSides[i], Vector3.forward);
+                float side = flapBoneSides[i];
+                bone.localRotation *= Quaternion.AngleAxis(flap * side, Vector3.forward) *
+                                      Quaternion.AngleAxis(lift, Vector3.right);
             }
         }
 
