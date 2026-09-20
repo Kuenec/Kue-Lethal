@@ -1757,6 +1757,11 @@ namespace Kue.Internal
                 return;
             }
             EnemyType type = enemyCatalog[index];
+            if (LiveNodes(true).Count == 0 && LiveNodes(false).Count == 0)
+            {
+                ReportActionFailure("Enemy spawn failed: no moon loaded, land first");
+                return;
+            }
             Vector3 position = SnapToNavMesh(TargetPosition(target) + TargetForward(target) * 2f);
             List<EnemyAI> spawned = new List<EnemyAI>();
             for (int i = 0; i < count; i++)
