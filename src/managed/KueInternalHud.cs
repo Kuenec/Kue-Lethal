@@ -331,7 +331,7 @@ namespace Kue.Internal
         private readonly List<Vector3> highlightQuadVertices = new List<Vector3>(4);
         private const float HighlightBlurRadius = 10f;
         private const int HighlightBlurSamples = 9;
-        private const float HighlightRingIntensity = 1.6f;
+        private const float HighlightRingIntensity = 8f;
         private const int HighlightAdditiveBlendMode = 1;
         private const int HighlightPremultipliedBlendMode = 4;
         private Material highlightCutoutMaterial;
