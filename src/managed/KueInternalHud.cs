@@ -709,6 +709,18 @@ namespace Kue.Internal
             return true;
         }
 
+        private Matrix4x4 HighlightProjection(Camera camera)
+        {
+            Matrix4x4 projection = camera.projectionMatrix;
+            float near = camera.nearClipPlane;
+            float far = Mathf.Max(camera.farClipPlane, maxDistance * 2f);
+            if (camera.orthographic || far <= camera.farClipPlane || near <= 0f)
+                return projection;
+            projection.m22 = -(far + near) / (far - near);
+            projection.m23 = -2f * far * near / (far - near);
+            return projection;
+        }
+
         private void UpdateHighlightQuad(Camera camera)
         {
             float depth = camera.nearClipPlane * 2f + 0.05f;
@@ -808,6 +820,9 @@ namespace Kue.Internal
                     int submeshCount = SubmeshCount(renderer);
                     if (submeshCount <= 0)
                         continue;
+                    SkinnedMeshRenderer skinned = renderer as SkinnedMeshRenderer;
+                    if (skinned != null && !skinned.updateWhenOffscreen)
+                        skinned.updateWhenOffscreen = true;
                     highlightDraws.Add(new HighlightDraw { renderer = renderer, material = material,
                                                            submeshCount = submeshCount });
                 }
@@ -825,7 +840,10 @@ namespace Kue.Internal
                                               context.hdCamera.actualHeight))
                     return;
                 CommandBuffer cmd = context.cmd;
-                UpdateHighlightQuad(context.hdCamera.camera);
+                Camera camera = context.hdCamera.camera;
+                UpdateHighlightQuad(camera);
+                cmd.SetViewProjectionMatrices(camera.worldToCameraMatrix,
+                                              HighlightProjection(camera));
                 CoreUtils.SetRenderTarget(cmd, highlightMask, ClearFlag.Color, Color.clear);
                 DrawHighlightModels(cmd, null);
                 CoreUtils.SetRenderTarget(cmd, highlightRing, ClearFlag.Color, Color.clear);
@@ -833,6 +851,7 @@ namespace Kue.Internal
                 DrawHighlightModels(cmd, highlightCutoutMaterial);
                 CoreUtils.SetRenderTarget(cmd, context.cameraColorBuffer);
                 cmd.DrawMesh(highlightQuad, Matrix4x4.identity, highlightRingMaterial, 0, 0);
+                cmd.SetViewProjectionMatrices(camera.worldToCameraMatrix, camera.projectionMatrix);
                 if (!highlightResourcesLogged)
                 {
                     highlightResourcesLogged = true;
