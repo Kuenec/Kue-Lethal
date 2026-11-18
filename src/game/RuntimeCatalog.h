@@ -48,6 +48,12 @@ struct MoonCatalogGeneration {
     friend constexpr bool operator==(MoonCatalogGeneration, MoonCatalogGeneration) = default;
 };
 
+struct HazardCatalogGeneration {
+    std::uint64_t value = 0;
+
+    friend constexpr bool operator==(HazardCatalogGeneration, HazardCatalogGeneration) = default;
+};
+
 struct EnemyTypeId {
     EnemyCatalogGeneration generation;
     std::uint16_t index = 0;
@@ -67,6 +73,13 @@ struct MoonTypeId {
     std::uint16_t index = 0;
 
     friend constexpr bool operator==(MoonTypeId, MoonTypeId) = default;
+};
+
+struct HazardTypeId {
+    HazardCatalogGeneration generation;
+    std::uint16_t index = 0;
+
+    friend constexpr bool operator==(HazardTypeId, HazardTypeId) = default;
 };
 
 enum class CatalogBeginResult : std::uint8_t { Begun, TransactionInProgress, GenerationExhausted };
@@ -156,11 +169,30 @@ enum class CatalogLookupResult : std::uint8_t {
     IndexOutOfRange
 };
 
+enum class EnemyHabitat : std::uint8_t { Facility, Outside };
+
+enum class EnemyMapSupport : std::uint8_t { Unsupported, Supported };
+
+struct EnemySpawnTraits {
+    EnemyHabitat habitat = EnemyHabitat::Facility;
+    EnemyMapSupport loadedMap = EnemyMapSupport::Unsupported;
+
+    friend constexpr bool operator==(EnemySpawnTraits, EnemySpawnTraits) = default;
+};
+
+enum class EnemyTraitsResult : std::uint8_t {
+    Recorded,
+    NoCatalog,
+    StaleGeneration,
+    IndexOutOfRange
+};
+
 struct EnemyCatalogEntry {
     EnemyTypeId id;
     RuntimeAssetIdentity asset;
     std::string_view name;
     std::uint32_t activeCount = 0;
+    EnemySpawnTraits traits;
 };
 
 struct ItemCatalogEntry {
@@ -171,6 +203,12 @@ struct ItemCatalogEntry {
 
 struct MoonCatalogEntry {
     MoonTypeId id;
+    RuntimeAssetIdentity asset;
+    std::string_view name;
+};
+
+struct HazardCatalogEntry {
+    HazardTypeId id;
     RuntimeAssetIdentity asset;
     std::string_view name;
 };
@@ -188,6 +226,11 @@ struct ItemCatalogLookup {
 struct MoonCatalogLookup {
     CatalogLookupResult result = CatalogLookupResult::NoCatalog;
     MoonCatalogEntry entry;
+};
+
+struct HazardCatalogLookup {
+    CatalogLookupResult result = CatalogLookupResult::NoCatalog;
+    HazardCatalogEntry entry;
 };
 
 class RuntimeCatalogs final {
@@ -216,6 +259,12 @@ class RuntimeCatalogs final {
     [[nodiscard]] CatalogCommitOutcome commitMoonCatalog() noexcept;
     [[nodiscard]] CatalogAbortResult abortMoonCatalog() noexcept;
 
+    [[nodiscard]] CatalogBeginResult beginHazardCatalog() noexcept;
+    [[nodiscard]] CatalogReportOutcome reportHazard(RuntimeAssetIdentity asset,
+                                                    OrderedCatalogName name) noexcept;
+    [[nodiscard]] CatalogCommitOutcome commitHazardCatalog() noexcept;
+    [[nodiscard]] CatalogAbortResult abortHazardCatalog() noexcept;
+
     [[nodiscard]] EnemyActivityBeginResult
     beginEnemyActivity(EnemyCatalogGeneration generation) noexcept;
     [[nodiscard]] EnemyActivityReportOutcome reportEnemyActivity(EnemyTypeId id,
@@ -223,18 +272,24 @@ class RuntimeCatalogs final {
     [[nodiscard]] EnemyActivityCommitOutcome commitEnemyActivity() noexcept;
     [[nodiscard]] CatalogAbortResult abortEnemyActivity() noexcept;
 
+    [[nodiscard]] EnemyTraitsResult setEnemySpawnTraits(EnemyTypeId id,
+                                                        EnemySpawnTraits traits) noexcept;
+
     [[nodiscard]] std::size_t enemyCount() const noexcept;
     [[nodiscard]] std::size_t itemCount() const noexcept;
     [[nodiscard]] std::size_t moonCount() const noexcept;
+    [[nodiscard]] std::size_t hazardCount() const noexcept;
     [[nodiscard]] EnemyCatalogGeneration enemyGeneration() const noexcept;
     [[nodiscard]] ItemCatalogGeneration itemGeneration() const noexcept;
     [[nodiscard]] MoonCatalogGeneration moonGeneration() const noexcept;
     [[nodiscard]] EnemyCatalogLookup enemyAt(std::size_t index) const noexcept;
     [[nodiscard]] ItemCatalogLookup itemAt(std::size_t index) const noexcept;
     [[nodiscard]] MoonCatalogLookup moonAt(std::size_t index) const noexcept;
+    [[nodiscard]] HazardCatalogLookup hazardAt(std::size_t index) const noexcept;
     [[nodiscard]] EnemyCatalogLookup enemy(EnemyTypeId id) const noexcept;
     [[nodiscard]] ItemCatalogLookup item(ItemTypeId id) const noexcept;
     [[nodiscard]] MoonCatalogLookup moon(MoonTypeId id) const noexcept;
+    [[nodiscard]] HazardCatalogLookup hazard(HazardTypeId id) const noexcept;
 
     void resetForSessionEnd() noexcept;
 
@@ -266,6 +321,7 @@ class RuntimeCatalogs final {
         EnemyCatalog,
         ItemCatalog,
         MoonCatalog,
+        HazardCatalog,
         EnemyActivity
     };
 
@@ -289,9 +345,11 @@ class RuntimeCatalogs final {
     CatalogStorage mEnemies;
     CatalogStorage mItems;
     CatalogStorage mMoons;
+    CatalogStorage mHazards;
     CatalogStaging mStaging;
     std::array<std::uint32_t, kRuntimeCatalogCapacity> mEnemyActivity{};
     std::array<std::uint32_t, kRuntimeCatalogCapacity> mStagedEnemyActivity{};
+    std::array<EnemySpawnTraits, kRuntimeCatalogCapacity> mEnemyTraits{};
     CatalogReportOutcome mCatalogFailure;
     EnemyActivityReportOutcome mActivityFailure;
     EnemyCatalogGeneration mActivityGeneration;

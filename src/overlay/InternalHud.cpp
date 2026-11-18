@@ -37,8 +37,9 @@ std::optional<ui::Interface> gInterface;
 PlayerActionQueue gManagedActions;
 constexpr int kMaximumScreenDimension = 16384;
 constexpr std::uint64_t kMaximumFontFileBytes = std::uint64_t{64} * 1024 * 1024;
-constexpr float kBodyFontPixels = 15.f;
-constexpr float kTitleFontPixels = 22.f;
+constexpr float kBodyFontPixels = 14.f;
+constexpr float kTitleFontPixels = 18.f;
+constexpr float kCaptionFontPixels = 12.f;
 
 ImFont* loadFontFile(ImGuiIO& io, const char* path, float pixels) {
     const platform::DescriptorResult opened = platform::openForRead(path);
@@ -77,7 +78,12 @@ ImFont* loadFontFile(ImGuiIO& io, const char* path, float pixels) {
         ImGui::MemFree(data);
         return nullptr;
     }
-    ImFont* const font = io.Fonts->AddFontFromMemoryTTF(data, static_cast<int>(size), pixels);
+    ImFontConfig pixelAligned;
+    pixelAligned.OversampleH = 1;
+    pixelAligned.OversampleV = 1;
+    pixelAligned.PixelSnapH = true;
+    ImFont* const font =
+        io.Fonts->AddFontFromMemoryTTF(data, static_cast<int>(size), pixels, &pixelAligned);
     if (!font)
         ImGui::MemFree(data);
     return font;
@@ -90,6 +96,18 @@ ImFont* loadSystemFont(ImGuiIO& io, platform::SystemFontRole role, float pixels)
         return nullptr;
     return loadFontFile(io, storage.data(), pixels);
 }
+
+ImFont* loadBodyFont(ImGuiIO& io, float pixels) {
+    ImFont* font = nullptr;
+    if (!gConfig->fontPath.empty()) {
+        font = loadFontFile(io, gConfig->fontPath.c_str(), pixels);
+    }
+    if (!font) {
+        font = loadSystemFont(io, platform::SystemFontRole::Body, pixels);
+    }
+    return font;
+}
+
 RuntimeCatalogs gRuntimeCatalogs;
 InternalHudRenderer gRenderer;
 double gLastFrameTime = 0.0;
@@ -97,9 +115,8 @@ double gNextFpsLabelTime = 0.0;
 float gDisplayedFps = 60.f;
 ConfigSaveSchedule gConfigSaveSchedule;
 int gConfigRevision = 1;
-std::optional<std::uint64_t> gPersistentLureClientId;
-bool gFlyEnabled = false;
-bool gLocalIsHost = false;
+SessionState gSession;
+std::optional<ui::MenuPreview> gPreview;
 
 bool readCatalogName(mono::MonoObject* stringObject,
                      std::array<char, mono::kManagedStringMaxUtf8Bytes>& storage,
@@ -142,9 +159,16 @@ enum class ManagedPayloadStatus : std::uint8_t {
     IndexOutOfRange,
 };
 
+struct ManagedActionArguments {
+    int clientId = -1;
+    int catalogIndex = -1;
+    int count = 0;
+    int amount = -1;
+};
+
 struct ManagedPayloadEncoding {
     ManagedPayloadStatus status = ManagedPayloadStatus::InvalidRequest;
-    int value = 0;
+    ManagedActionArguments arguments;
 };
 
 ManagedPayloadStatus managedPayloadStatus(PlayerActionCatalogResolutionResult result) noexcept {
@@ -164,59 +188,85 @@ ManagedPayloadStatus managedPayloadStatus(PlayerActionCatalogResolutionResult re
     return ManagedPayloadStatus::InvalidRequest;
 }
 
+std::optional<int> managedClientId(std::uint64_t clientId) noexcept {
+    if (clientId > static_cast<std::uint64_t>(std::numeric_limits<int>::max())) {
+        return std::nullopt;
+    }
+    return static_cast<int>(clientId);
+}
+
 ManagedPayloadEncoding encodeManagedPayload(const PlayerActionRequest& request,
                                             const RuntimeCatalogs& catalogs) {
     const PlayerActionCatalogResolution resolution = resolvePlayerActionCatalog(request, catalogs);
     const ManagedPayloadStatus resolutionStatus = managedPayloadStatus(resolution.result);
-    if (resolutionStatus != ManagedPayloadStatus::Encoded)
-        return {resolutionStatus, 0};
+    if (resolutionStatus != ManagedPayloadStatus::Encoded) {
+        return {resolutionStatus, {}};
+    }
+    const int catalogIndex = static_cast<int>(resolution.index);
     if (std::holds_alternative<NoPlayerActionPayload>(request.payload)) {
-        return {ManagedPayloadStatus::Encoded, -1};
+        return {ManagedPayloadStatus::Encoded, {}};
     }
     if (const auto* payload = std::get_if<PlayerTargetPayload>(&request.payload)) {
-        if (payload->clientId > static_cast<std::uint64_t>(std::numeric_limits<int>::max()))
-            return {ManagedPayloadStatus::ClientIdOutOfRange, 0};
-        return {ManagedPayloadStatus::Encoded, static_cast<int>(payload->clientId)};
+        const std::optional<int> clientId = managedClientId(payload->clientId);
+        if (!clientId) {
+            return {ManagedPayloadStatus::ClientIdOutOfRange, {}};
+        }
+        return {ManagedPayloadStatus::Encoded, {.clientId = *clientId}};
     }
     if (const auto* payload = std::get_if<EnemySpawnPayload>(&request.payload)) {
-        int output = static_cast<int>(resolution.index) | (static_cast<int>(payload->count) << 16);
-        if (payload->area == EnemySpawnArea::Outside)
-            output |= 1 << 30;
-        return {ManagedPayloadStatus::Encoded, output};
+        return {ManagedPayloadStatus::Encoded,
+                {.catalogIndex = catalogIndex, .count = static_cast<int>(payload->count)}};
     }
     if (const auto* payload = std::get_if<EnemyAtPlayerPayload>(&request.payload)) {
-        constexpr std::uint64_t maximumClientId = 0xfffU;
-        if (payload->clientId > maximumClientId)
-            return {ManagedPayloadStatus::ClientIdOutOfRange, 0};
-        int output = static_cast<int>(resolution.index) | (static_cast<int>(payload->count) << 12) |
-                     (static_cast<int>(payload->clientId) << 18);
-        if (payload->area == EnemySpawnArea::Outside)
-            output |= 1 << 17;
-        return {ManagedPayloadStatus::Encoded, output};
+        const std::optional<int> clientId = managedClientId(payload->clientId);
+        if (!clientId) {
+            return {ManagedPayloadStatus::ClientIdOutOfRange, {}};
+        }
+        return {ManagedPayloadStatus::Encoded,
+                {.clientId = *clientId,
+                 .catalogIndex = catalogIndex,
+                 .count = static_cast<int>(payload->count),
+                 .amount = static_cast<int>(payload->distanceMeters)}};
     }
     if (const auto* payload = std::get_if<ItemAtPlayerPayload>(&request.payload)) {
-        constexpr std::uint64_t maximumClientId = 0xfffU;
-        if (payload->clientId > maximumClientId)
-            return {ManagedPayloadStatus::ClientIdOutOfRange, 0};
-        const int output = static_cast<int>(resolution.index) |
-                           (static_cast<int>(payload->count) << 12) |
-                           (static_cast<int>(payload->clientId) << 17);
-        return {ManagedPayloadStatus::Encoded, output};
+        const std::optional<int> clientId = managedClientId(payload->clientId);
+        if (!clientId) {
+            return {ManagedPayloadStatus::ClientIdOutOfRange, {}};
+        }
+        return {ManagedPayloadStatus::Encoded,
+                {.clientId = *clientId,
+                 .catalogIndex = catalogIndex,
+                 .count = static_cast<int>(payload->count),
+                 .amount = payload->fixedScrapValue.value_or(-1)}};
     }
-    if (const auto* payload = std::get_if<TerminalCreditsPayload>(&request.payload))
-        return {ManagedPayloadStatus::Encoded, payload->amount};
-    if (std::holds_alternative<MoonTravelPayload>(request.payload))
-        return {ManagedPayloadStatus::Encoded, static_cast<int>(resolution.index)};
+    if (const auto* payload = std::get_if<HazardAtPlayerPayload>(&request.payload)) {
+        const std::optional<int> clientId = managedClientId(payload->clientId);
+        if (!clientId) {
+            return {ManagedPayloadStatus::ClientIdOutOfRange, {}};
+        }
+        return {ManagedPayloadStatus::Encoded,
+                {.clientId = *clientId,
+                 .catalogIndex = catalogIndex,
+                 .count = static_cast<int>(payload->count),
+                 .amount = static_cast<int>(payload->distanceMeters)}};
+    }
+    if (const auto* payload = std::get_if<TerminalCreditsPayload>(&request.payload)) {
+        return {ManagedPayloadStatus::Encoded, {.amount = payload->amount}};
+    }
+    if (std::holds_alternative<MoonTravelPayload>(request.payload)) {
+        return {ManagedPayloadStatus::Encoded, {.catalogIndex = catalogIndex}};
+    }
     const auto* payload = std::get_if<PlushieIntervalPayload>(&request.payload);
-    if (!payload || payload->interval.count() > std::numeric_limits<int>::max())
+    if (!payload || payload->interval.count() > std::numeric_limits<int>::max()) {
         return {};
-    return {ManagedPayloadStatus::Encoded, static_cast<int>(payload->interval.count())};
+    }
+    return {ManagedPayloadStatus::Encoded, {.amount = static_cast<int>(payload->interval.count())}};
 }
 
 void discardImGuiContext() noexcept {
     if (gContext) {
         ImGui::SetCurrentContext(gContext);
-        ui::setFonts({.body = nullptr, .title = nullptr});
+        ui::setFonts({.body = nullptr, .title = nullptr, .caption = nullptr});
         gRenderer.clearFontAtlas();
         ImGui::DestroyContext(gContext);
         gContext = nullptr;
@@ -234,16 +284,18 @@ void ensureContext() {
     io.IniFilename = nullptr;
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
 
-    ImFont* body = nullptr;
-    if (!gConfig->fontPath.empty())
-        body = loadFontFile(io, gConfig->fontPath.c_str(), kBodyFontPixels);
-    if (!body)
-        body = loadSystemFont(io, platform::SystemFontRole::Body, kBodyFontPixels);
-    if (!body)
+    ImFont* body = loadBodyFont(io, kBodyFontPixels);
+    if (!body) {
         body = io.Fonts->AddFontDefault();
+    }
+    ImFont* caption = loadBodyFont(io, kCaptionFontPixels);
+    if (!caption) {
+        caption = body;
+    }
     ImFont* title = loadSystemFont(io, platform::SystemFontRole::Title, kTitleFontPixels);
-    if (!title)
+    if (!title) {
         title = body;
+    }
     io.FontDefault = body;
     unsigned char* fontPixels = nullptr;
     int fontWidth = 0;
@@ -263,7 +315,7 @@ void ensureContext() {
         discardImGuiContext();
         return;
     }
-    ui::setFonts({.body = body, .title = title});
+    ui::setFonts({.body = body, .title = title, .caption = caption});
     ui::applyTheme();
     if (!gInterface) {
         gInterface.emplace();
@@ -273,8 +325,8 @@ void ensureContext() {
 }
 
 void* MSABI renderMenu(int screenW, int screenH, float mouseX, float mouseY, int mouseDown,
-                       float wheel, int* outX, int* outY, int* outW, int* outH, int* outBytes,
-                       std::uint64_t* outRevision) {
+                       float wheel, int pressedKey, int* outX, int* outY, int* outW, int* outH,
+                       int* outBytes, std::uint64_t* outRevision) {
     if (outX)
         *outX = 0;
     if (outY)
@@ -313,14 +365,13 @@ void* MSABI renderMenu(int screenW, int screenH, float mouseX, float mouseY, int
 
     static MenuSnapshot snapshot;
     snapshot.playerFrame = gSource->readPlayerFrame();
-    snapshot.persistentLureClientId = gPersistentLureClientId;
-    snapshot.flyEnabled = gFlyEnabled;
-    snapshot.localIsHost = gLocalIsHost;
+    snapshot.session = gSession;
 
     InternalHudFrameTransaction transaction(*gInterface, *gConfig);
-    transaction.interface().render(snapshot, gRuntimeCatalogs,
-                                   ui::MenuFrame{screenW, screenH, gDisplayedFps},
-                                   gSource->status(), transaction.configuration());
+    transaction.interface().render(
+        snapshot, gRuntimeCatalogs,
+        ui::MenuFrame{screenW, screenH, gDisplayedFps, parseMenuKey(pressedKey)}, gSource->status(),
+        transaction.configuration());
     ImGui::Render();
 
     MenuRasterFrame rasterFrame{};
@@ -337,6 +388,7 @@ void* MSABI renderMenu(int screenW, int screenH, float mouseX, float mouseY, int
         return nullptr;
     }
     lastRasterStatus = MenuRasterStatus::Success;
+    gPreview = gInterface->preview();
 
     PlayerActionRequest action;
     if (gInterface->readAction(action)) {
@@ -436,27 +488,70 @@ void MSABI getHudConfig(int* flags, float* maxDistance, int* menuKey, int* tickI
         *revision = gConfigRevision;
 }
 
-int MSABI pollAction(int* targetClientId) {
+int MSABI pollAction(int* clientId, int* catalogIndex, int* count, int* amount) {
     PlayerActionRequest request;
-    if (!gManagedActions.pop(request))
+    if (!gManagedActions.pop(request)) {
         return static_cast<int>(PlayerAction::None);
+    }
     const ManagedPayloadEncoding encoding = encodeManagedPayload(request, gRuntimeCatalogs);
     if (encoding.status != ManagedPayloadStatus::Encoded) {
         KUE_ERR("internal HUD: queued action rejected action=%d payload-status=%u",
                 static_cast<int>(request.action), static_cast<unsigned int>(encoding.status));
         return static_cast<int>(PlayerAction::None);
     }
-    if (targetClientId)
-        *targetClientId = encoding.value;
+    if (clientId) {
+        *clientId = encoding.arguments.clientId;
+    }
+    if (catalogIndex) {
+        *catalogIndex = encoding.arguments.catalogIndex;
+    }
+    if (count) {
+        *count = encoding.arguments.count;
+    }
+    if (amount) {
+        *amount = encoding.arguments.amount;
+    }
     return static_cast<int>(request.action);
 }
 
-void MSABI reportPersistentLureTarget(int targetClientId) {
-    if (targetClientId < 0) {
-        gPersistentLureClientId.reset();
-        return;
+void MSABI reportSessionState(int switches, int world, std::int64_t playersInFacility,
+                              int lureClientId, int lureSecondsLeft) {
+    SessionState session;
+    session.switches = FlagSet<SessionSwitch>::fromBits(static_cast<std::uint32_t>(switches));
+    session.world = FlagSet<WorldFeature>::fromBits(static_cast<std::uint32_t>(world));
+    session.playersInFacility = static_cast<std::uint64_t>(playersInFacility);
+    if (lureClientId >= 0) {
+        EnemyLure lure{.clientId = static_cast<std::uint64_t>(lureClientId), .secondsLeft = {}};
+        if (lureSecondsLeft >= 0) {
+            lure.secondsLeft = lureSecondsLeft;
+        }
+        session.lure = lure;
     }
-    gPersistentLureClientId = static_cast<std::uint64_t>(targetClientId);
+    gSession = session;
+}
+
+int MSABI getPreviewRequest(int* kind, int* catalogIndex, int* x, int* y, int* width, int* height) {
+    if (!gPreview || !kind || !catalogIndex || !x || !y || !width || !height) {
+        return 0;
+    }
+    *kind = static_cast<int>(gPreview->kind);
+    *catalogIndex = static_cast<int>(gPreview->catalogIndex);
+    *x = static_cast<int>(std::ceil(gPreview->rectangle.x));
+    *y = static_cast<int>(std::ceil(gPreview->rectangle.y));
+    *width = static_cast<int>(std::floor(gPreview->rectangle.width));
+    *height = static_cast<int>(std::floor(gPreview->rectangle.height));
+    return 1;
+}
+
+int MSABI reportEnemySpawnTraits(int index, int outside, int supported) {
+    if (index < 0 || static_cast<std::size_t>(index) >= kRuntimeCatalogCapacity) {
+        return static_cast<int>(EnemyTraitsResult::IndexOutOfRange);
+    }
+    const EnemyTypeId id{gRuntimeCatalogs.enemyGeneration(), static_cast<std::uint16_t>(index)};
+    const EnemySpawnTraits traits{
+        .habitat = outside != 0 ? EnemyHabitat::Outside : EnemyHabitat::Facility,
+        .loadedMap = supported != 0 ? EnemyMapSupport::Supported : EnemyMapSupport::Unsupported};
+    return static_cast<int>(gRuntimeCatalogs.setEnemySpawnTraits(id, traits));
 }
 
 void MSABI resetRuntimeCatalogs() {
@@ -610,12 +705,45 @@ void MSABI abortMoonCatalog() {
     static_cast<void>(gRuntimeCatalogs.abortMoonCatalog());
 }
 
-void MSABI reportFlyState(int enabled) {
-    gFlyEnabled = enabled != 0;
+int MSABI beginHazardCatalog() {
+    return static_cast<int>(gRuntimeCatalogs.beginHazardCatalog());
 }
 
-void MSABI reportHostState(int isHost) {
-    gLocalIsHost = isHost != 0;
+int MSABI reportHazardType(int instanceId, mono::MonoObject* name) {
+    const RuntimeAssetIdentity identity = runtimeAssetIdentityFromSigned32(instanceId);
+    std::array<char, mono::kManagedStringMaxUtf8Bytes> decodedBytes{};
+    std::string_view decoded;
+    if (!name || !readCatalogName(name, decodedBytes, decoded)) {
+        static_cast<void>(gRuntimeCatalogs.abortHazardCatalog());
+        return -1;
+    }
+    const CatalogReportOutcome outcome =
+        gRuntimeCatalogs.reportHazard(identity, OrderedCatalogName{decoded});
+    if (outcome.result != CatalogReportResult::Recorded) {
+        KUE_ERR(
+            "internal HUD: hazard catalog report failed result=%u entry=%u actual=%llu limit=%llu",
+            static_cast<unsigned int>(outcome.result),
+            static_cast<unsigned int>(outcome.entryIndex),
+            static_cast<unsigned long long>(outcome.actual),
+            static_cast<unsigned long long>(outcome.limit));
+    }
+    return static_cast<int>(outcome.result);
+}
+
+int MSABI commitHazardCatalog() {
+    const CatalogCommitOutcome outcome = gRuntimeCatalogs.commitHazardCatalog();
+    if (outcome.result != CatalogCommitResult::Committed &&
+        outcome.result != CatalogCommitResult::Unchanged) {
+        KUE_ERR("internal HUD: hazard catalog commit failed result=%u report=%u entry=%u",
+                static_cast<unsigned int>(outcome.result),
+                static_cast<unsigned int>(outcome.failure.result),
+                static_cast<unsigned int>(outcome.failure.entryIndex));
+    }
+    return static_cast<int>(outcome.result);
+}
+
+void MSABI abortHazardCatalog() {
+    static_cast<void>(gRuntimeCatalogs.abortHazardCatalog());
 }
 
 void MSABI getEspColor(int category, float* r, float* g, float* b, float* a) {
@@ -670,9 +798,13 @@ bool registerManagedBridge() {
     const bool catalogReset =
         mono::addInternalCall("Kue.Internal.NativeBridge::ResetRuntimeCatalogs",
                               reinterpret_cast<const void*>(&resetRuntimeCatalogs));
-    const bool lureState =
-        mono::addInternalCall("Kue.Internal.NativeBridge::ReportPersistentLureTarget",
-                              reinterpret_cast<const void*>(&reportPersistentLureTarget));
+    const bool sessionState =
+        mono::addInternalCall("Kue.Internal.NativeBridge::ReportSessionState",
+                              reinterpret_cast<const void*>(&reportSessionState)) &&
+        mono::addInternalCall("Kue.Internal.NativeBridge::ReportEnemySpawnTraits",
+                              reinterpret_cast<const void*>(&reportEnemySpawnTraits)) &&
+        mono::addInternalCall("Kue.Internal.NativeBridge::GetPreviewRequest",
+                              reinterpret_cast<const void*>(&getPreviewRequest));
     const bool catalogBegin =
         mono::addInternalCall("Kue.Internal.NativeBridge::BeginEnemyCatalog",
                               reinterpret_cast<const void*>(&beginEnemyCatalog));
@@ -697,10 +829,6 @@ bool registerManagedBridge() {
     const bool activeCatalogAbort =
         mono::addInternalCall("Kue.Internal.NativeBridge::AbortActiveEnemyTypes",
                               reinterpret_cast<const void*>(&abortActiveEnemyTypes));
-    const bool flyState = mono::addInternalCall("Kue.Internal.NativeBridge::ReportFlyState",
-                                                reinterpret_cast<const void*>(&reportFlyState));
-    const bool hostState = mono::addInternalCall("Kue.Internal.NativeBridge::ReportHostState",
-                                                 reinterpret_cast<const void*>(&reportHostState));
     const bool itemCatalogBegin =
         mono::addInternalCall("Kue.Internal.NativeBridge::BeginItemCatalog",
                               reinterpret_cast<const void*>(&beginItemCatalog));
@@ -722,12 +850,20 @@ bool registerManagedBridge() {
                               reinterpret_cast<const void*>(&commitMoonCatalog)) &&
         mono::addInternalCall("Kue.Internal.NativeBridge::AbortMoonCatalog",
                               reinterpret_cast<const void*>(&abortMoonCatalog));
-    const bool registered = render && hudConfig && color && actions && catalogReset &&
-                            lureState && catalogBegin && catalogEntry && catalogCommit &&
-                            catalogAbort && activeCatalogBegin && activeCatalogEntry &&
-                            activeCatalogCommit && activeCatalogAbort && flyState && hostState &&
-                            itemCatalogBegin && itemCatalogEntry && itemCatalogCommit &&
-                            itemCatalogAbort && moonCatalog;
+    const bool hazardCatalog =
+        mono::addInternalCall("Kue.Internal.NativeBridge::BeginHazardCatalog",
+                              reinterpret_cast<const void*>(&beginHazardCatalog)) &&
+        mono::addInternalCall("Kue.Internal.NativeBridge::ReportHazardType",
+                              reinterpret_cast<const void*>(&reportHazardType)) &&
+        mono::addInternalCall("Kue.Internal.NativeBridge::CommitHazardCatalog",
+                              reinterpret_cast<const void*>(&commitHazardCatalog)) &&
+        mono::addInternalCall("Kue.Internal.NativeBridge::AbortHazardCatalog",
+                              reinterpret_cast<const void*>(&abortHazardCatalog));
+    const bool registered =
+        render && hudConfig && color && actions && catalogReset && sessionState && catalogBegin &&
+        catalogEntry && catalogCommit && catalogAbort && activeCatalogBegin && activeCatalogEntry &&
+        activeCatalogCommit && activeCatalogAbort && itemCatalogBegin && itemCatalogEntry &&
+        itemCatalogCommit && itemCatalogAbort && moonCatalog && hazardCatalog;
     if (registered)
         KUE_INFO("internal HUD: Mono bridge registered");
     return registered;

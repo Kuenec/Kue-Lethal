@@ -786,26 +786,22 @@ bool validateColor(const std::array<float, 4>& color, std::string_view key, std:
     return true;
 }
 
-bool supportedMenuKey(int key) {
-    return (key >= static_cast<int>(MenuKey::Space) && key <= static_cast<int>(MenuKey::Tab)) ||
-           (key >= static_cast<int>(MenuKey::A) && key <= static_cast<int>(MenuKey::Digit0)) ||
-           key == static_cast<int>(MenuKey::Insert) ||
-           (key >= static_cast<int>(MenuKey::F1) && key <= static_cast<int>(MenuKey::F12));
-}
-
 bool readMenuKey(const json& object, MenuKey& output, std::string& error) {
     int parsed = static_cast<int>(output);
     if (!readInteger(object, "menuKey", parsed, error))
         return false;
-    if (!supportedMenuKey(parsed))
+    const std::optional<MenuKey> key = parseMenuKey(parsed);
+    if (!key) {
         return fail(error, "menuKey must be a supported Unity Input System key");
-    output = static_cast<MenuKey>(parsed);
+    }
+    output = *key;
     return true;
 }
 
 bool validate(const Config& cfg, std::string& error) {
-    if (!supportedMenuKey(static_cast<int>(cfg.menuKey)))
+    if (!parseMenuKey(static_cast<int>(cfg.menuKey))) {
         return fail(error, "menuKey must be a supported Unity Input System key");
+    }
     if (!std::isfinite(cfg.pollRate) || cfg.pollRate < 10.f || cfg.pollRate > 90.f)
         return fail(error, "pollRate must be finite and within [10, 90]");
     if (cfg.tickIntervalMs < 33 || cfg.tickIntervalMs > 500)

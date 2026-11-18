@@ -84,6 +84,23 @@ CatalogAbortResult RuntimeCatalogs::abortMoonCatalog() noexcept {
     return abort(Transaction::MoonCatalog);
 }
 
+CatalogBeginResult RuntimeCatalogs::beginHazardCatalog() noexcept {
+    return beginCatalog(Transaction::HazardCatalog, mHazards.generation);
+}
+
+CatalogReportOutcome RuntimeCatalogs::reportHazard(RuntimeAssetIdentity runtimeAsset,
+                                                   OrderedCatalogName orderedName) noexcept {
+    return reportCatalog(Transaction::HazardCatalog, runtimeAsset, orderedName);
+}
+
+CatalogCommitOutcome RuntimeCatalogs::commitHazardCatalog() noexcept {
+    return commitCatalog(Transaction::HazardCatalog, mHazards);
+}
+
+CatalogAbortResult RuntimeCatalogs::abortHazardCatalog() noexcept {
+    return abort(Transaction::HazardCatalog);
+}
+
 CatalogBeginResult RuntimeCatalogs::beginCatalog(Transaction transaction,
                                                  std::uint64_t generation) noexcept {
     if (mTransaction != Transaction::None)
@@ -228,6 +245,7 @@ CatalogCommitOutcome RuntimeCatalogs::commitCatalog(Transaction transaction,
     ++live.generation;
     if (transaction == Transaction::EnemyCatalog) {
         mEnemyActivity.fill(0);
+        mEnemyTraits.fill(EnemySpawnTraits{});
     }
     clearTransaction();
     return {CatalogCommitResult::Committed, {}};
@@ -318,6 +336,21 @@ CatalogAbortResult RuntimeCatalogs::abortEnemyActivity() noexcept {
     return abort(Transaction::EnemyActivity);
 }
 
+EnemyTraitsResult RuntimeCatalogs::setEnemySpawnTraits(EnemyTypeId id,
+                                                       EnemySpawnTraits traits) noexcept {
+    if (mEnemies.count == 0) {
+        return EnemyTraitsResult::NoCatalog;
+    }
+    if (id.generation.value != mEnemies.generation) {
+        return EnemyTraitsResult::StaleGeneration;
+    }
+    if (static_cast<std::size_t>(id.index) >= static_cast<std::size_t>(mEnemies.count)) {
+        return EnemyTraitsResult::IndexOutOfRange;
+    }
+    mEnemyTraits[id.index] = traits;
+    return EnemyTraitsResult::Recorded;
+}
+
 std::size_t RuntimeCatalogs::enemyCount() const noexcept {
     return mEnemies.count;
 }
@@ -328,6 +361,10 @@ std::size_t RuntimeCatalogs::itemCount() const noexcept {
 
 std::size_t RuntimeCatalogs::moonCount() const noexcept {
     return mMoons.count;
+}
+
+std::size_t RuntimeCatalogs::hazardCount() const noexcept {
+    return mHazards.count;
 }
 
 EnemyCatalogGeneration RuntimeCatalogs::enemyGeneration() const noexcept {
@@ -350,7 +387,7 @@ EnemyCatalogLookup RuntimeCatalogs::enemyAt(std::size_t index) const noexcept {
     const StoredCatalogEntry& stored = mEnemies.entries[index];
     return {CatalogLookupResult::Found,
             {EnemyTypeId{{mEnemies.generation}, static_cast<std::uint16_t>(index)}, stored.asset,
-             liveName(mEnemies, index), mEnemyActivity[index]}};
+             liveName(mEnemies, index), mEnemyActivity[index], mEnemyTraits[index]}};
 }
 
 ItemCatalogLookup RuntimeCatalogs::itemAt(std::size_t index) const noexcept {
@@ -373,6 +410,29 @@ MoonCatalogLookup RuntimeCatalogs::moonAt(std::size_t index) const noexcept {
     return {CatalogLookupResult::Found,
             {MoonTypeId{{mMoons.generation}, static_cast<std::uint16_t>(index)}, stored.asset,
              liveName(mMoons, index)}};
+}
+
+HazardCatalogLookup RuntimeCatalogs::hazardAt(std::size_t index) const noexcept {
+    if (mHazards.count == 0) {
+        return {CatalogLookupResult::NoCatalog, {}};
+    }
+    if (index >= static_cast<std::size_t>(mHazards.count)) {
+        return {CatalogLookupResult::IndexOutOfRange, {}};
+    }
+    const StoredCatalogEntry& stored = mHazards.entries[index];
+    return {CatalogLookupResult::Found,
+            {HazardTypeId{{mHazards.generation}, static_cast<std::uint16_t>(index)}, stored.asset,
+             liveName(mHazards, index)}};
+}
+
+HazardCatalogLookup RuntimeCatalogs::hazard(HazardTypeId id) const noexcept {
+    if (mHazards.count == 0) {
+        return {CatalogLookupResult::NoCatalog, {}};
+    }
+    if (id.generation.value != mHazards.generation) {
+        return {CatalogLookupResult::StaleGeneration, {}};
+    }
+    return hazardAt(id.index);
 }
 
 EnemyCatalogLookup RuntimeCatalogs::enemy(EnemyTypeId id) const noexcept {
@@ -412,12 +472,17 @@ void RuntimeCatalogs::resetForSessionEnd() noexcept {
     mMoons.text.fill(0);
     mMoons.textBytes = 0;
     mMoons.count = 0;
+    mHazards.entries.fill(StoredCatalogEntry{});
+    mHazards.text.fill(0);
+    mHazards.textBytes = 0;
+    mHazards.count = 0;
     mStaging.entries.fill(StoredCatalogEntry{});
     mStaging.text.fill(0);
     mStaging.textBytes = 0;
     mStaging.count = 0;
     mEnemyActivity.fill(0);
     mStagedEnemyActivity.fill(0);
+    mEnemyTraits.fill(EnemySpawnTraits{});
     mCatalogFailure = {};
     mActivityFailure = {};
     mActivityGeneration = {};

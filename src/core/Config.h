@@ -4,6 +4,7 @@
 #include <array>
 #include <chrono>
 #include <cstdint>
+#include <optional>
 #include <string>
 
 namespace kue {
@@ -62,6 +63,20 @@ enum class MenuKey : std::uint8_t {
     F11 = 104,
     F12 = 105,
 };
+
+[[nodiscard]] constexpr std::optional<MenuKey> parseMenuKey(int inputSystemKey) noexcept {
+    const bool supported = (inputSystemKey >= static_cast<int>(MenuKey::Space) &&
+                            inputSystemKey <= static_cast<int>(MenuKey::Tab)) ||
+                           (inputSystemKey >= static_cast<int>(MenuKey::A) &&
+                            inputSystemKey <= static_cast<int>(MenuKey::Digit0)) ||
+                           inputSystemKey == static_cast<int>(MenuKey::Insert) ||
+                           (inputSystemKey >= static_cast<int>(MenuKey::F1) &&
+                            inputSystemKey <= static_cast<int>(MenuKey::F12));
+    if (!supported) {
+        return std::nullopt;
+    }
+    return static_cast<MenuKey>(inputSystemKey);
+}
 
 struct EspConfig {
     bool items = true;

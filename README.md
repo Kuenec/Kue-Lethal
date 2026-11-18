@@ -8,15 +8,15 @@ This is a personal project. It works well for me; it may or may not work for you
 
 | Area | Features |
 |---|---|
-| Self | Infinite stamina, no weight, infinite battery, expanded inventory, fly (with flapping arms), third person, heal, kill |
-| Visuals | ESP for players, items, enemies, entrances, fire exits, and the ship, with model outlines, names, scrap values, distances, and tracer lines |
-| Players | Teleport, kill, heal, insanity control, one-shot enemy lure, and persistent targeting |
-| Enemies | Spawn any installed enemy type, spawn or teleport enemies onto a player, stun or kill everything |
-| Items | Spawn any installed item, teleport loose items to a player, deposit all ship scrap on the company desk, add terminal credits (host) |
+| Self | Infinite stamina, no carry weight, infinite battery, extended inventory, fly (with flapping arms), emote while moving, third person, hear every player's voice anywhere, heal, kill |
+| Visuals | ESP for players, scrap, enemies, entrances, fire exits, and the ship, with model outlines, names, scrap values, distances, tracer lines, and per-category colors |
+| Players | Teleport to a player, kill, insanity control, a 30-second enemy lure, persistent targeting, and teleporting enemies to a player |
+| Enemies | Spawn any installed enemy type in its own area or near a player at a chosen distance, place turrets, landmines, and other traps near a player, bring living enemies to a player, stun or kill everything |
+| Items | Spawn any installed item with its normal or a fixed scrap value, bring loose items to a player, put all ship scrap on the company counter, add terminal credits (host) |
 | Moons | Route the ship to any moon the game knows, including ones the terminal hides, free of charge |
-| Trolls | Ship, factory, terminal, landmine, turret, bridge, vehicle, shotgun, and company-desk actions |
+| World | Ship, cruiser, company, facility, landmine, turret, bridge, shotgun, jetpack, and mask actions |
 
-Enemy, item, and moon lists are read from the installed game assets at runtime and rescanned while you play, so new content shows up without an update here. ESP outlines are rendered by the game's own pipeline, which means they follow the model exactly and stay visible through walls.
+Enemy, item, trap, and moon lists are read from the installed game assets at runtime and rescanned while you play, so new content shows up without an update here. An enemy type is only offered where it can function: outside types outside, facility types in the facility, and only on maps that have the navigation nodes it needs. ESP outlines are rendered by the game's own pipeline, which means they follow the model exactly and stay visible through walls.
 
 ## Requirements
 
@@ -95,16 +95,16 @@ Both loaders honor the same overrides: `KUE_MODULE`, `KUE_CONFIG`, `KUE_LOG`, an
 
 Press Insert to open or close the menu. Escape also closes it and restores the game's input state.
 
-- **Self**: movement, inventory, health, fly, third person, and death controls
-- **Visuals**: ESP categories, outlines, labels, lines, distance, and colors
+- **Self**: movement, gear, senses, health, and death controls
+- **Visuals**: ESP categories, style, range, colors, and death alerts
 - **Players**: per-player actions and enemy targeting
-- **Enemies**: spawning and global enemy actions
-- **Items**: spawning, teleporting, depositing scrap, and terminal credits
+- **Enemies**: enemy and trap spawning, and actions on every living enemy
+- **Items**: spawning, moving items, the company counter, and terminal credits
 - **Moons**: pick any known moon and route the ship there while in orbit
-- **Trolls**: host and client-side world actions
-- **Settings**: menu key, update rates, and configuration saving
+- **World**: ship, cruiser, company, facility, and gear controls
+- **Settings**: menu key, update rates, saving, and a list of the keys in use
 
-Some actions are host only because the game only lets the host perform them; the menu greys those out when you join as a client.
+The enemy, trap, and item lists show a slowly turning model of the selected entry. The menu only shows what is possible right now. Host-only controls are hidden while you are a client, and controls for things that are not on the map, such as landmines, a cruiser, or the company counter, appear when those things exist. Hover a control to read what it does in the bar at the bottom.
 
 ## Configuration
 

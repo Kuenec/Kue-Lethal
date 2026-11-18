@@ -23,6 +23,7 @@
 #include <iostream>
 #include <limits>
 #include <new>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -195,6 +196,18 @@ class TestRun final {
     int mFailures = 0;
 };
 
+struct ScreenPoint {
+    float x;
+    float y;
+};
+
+constexpr ScreenPoint kStaminaSwitch{897.f, 399.f};
+constexpr ScreenPoint kPlayersPage{667.f, 453.f};
+constexpr ScreenPoint kItemsPage{667.f, 513.f};
+constexpr ScreenPoint kSettingsPage{667.f, 603.f};
+constexpr ScreenPoint kKillPlayer{1097.f, 453.f};
+constexpr ScreenPoint kSaveSettings{877.f, 521.f};
+
 struct PointerInput {
     float x = -1000.f;
     float y = -1000.f;
@@ -217,7 +230,8 @@ class HudHarness final {
         mInterface.setVisible(kue::ui::MenuVisibility::Visible);
         mSnapshot.playerFrame.sprintMeter = 0.73f;
         mSnapshot.playerFrame.carryWeight = 1.42f;
-        mSnapshot.flyEnabled = true;
+        mSnapshot.session.switches.set(kue::SessionSwitch::Fly);
+        mSnapshot.session.world.set(kue::WorldFeature::PlayersCanDie);
         kue::PlayerSnapshotTransaction players;
         if (players.report({"Kue", 76561198000000001ULL, 0, 100, 12.f, false, true, true}).result !=
                 kue::PlayerSnapshotReportResult::Recorded ||
@@ -248,8 +262,8 @@ class HudHarness final {
         ImGui::NewFrame();
 
         kue::internalhud::InternalHudFrameTransaction transaction(mInterface, mConfig);
-        transaction.interface().render(mSnapshot, gCatalogs, {1920, 1080, 0.f}, "ready",
-                                       transaction.configuration());
+        transaction.interface().render(mSnapshot, gCatalogs, {1920, 1080, 0.f, std::nullopt},
+                                       "ready", transaction.configuration());
         ImGui::Render();
         ImDrawData* const drawData = ImGui::GetDrawData();
         mutateDrawData(drawData);
@@ -270,6 +284,10 @@ class HudHarness final {
         createContext();
     }
 
+    void setWorldFeature(kue::WorldFeature feature) noexcept {
+        mSnapshot.session.world.set(feature);
+    }
+
     [[nodiscard]] kue::Config& config() noexcept { return mConfig; }
 
     [[nodiscard]] kue::ui::Interface& interface() noexcept { return mInterface; }
@@ -283,19 +301,24 @@ class HudHarness final {
         ImGuiIO& io = ImGui::GetIO();
         io.IniFilename = nullptr;
         io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
-        ImFont* body = io.Fonts->AddFontFromFileTTF("/usr/share/fonts/TTF/DejaVuSans.ttf", 15.f);
-        if (!body) {
-            body = io.Fonts->AddFontFromFileTTF("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-                                                15.f);
-        }
+        ImFontConfig pixelAligned;
+        pixelAligned.OversampleH = 1;
+        pixelAligned.OversampleV = 1;
+        pixelAligned.PixelSnapH = true;
+        const auto loadFont = [&](const char* archPath, const char* debianPath, float pixels) {
+            ImFont* font = io.Fonts->AddFontFromFileTTF(archPath, pixels, &pixelAligned);
+            return font ? font : io.Fonts->AddFontFromFileTTF(debianPath, pixels, &pixelAligned);
+        };
+        constexpr const char* regular = "/usr/share/fonts/TTF/DejaVuSans.ttf";
+        constexpr const char* regularDebian = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf";
+        ImFont* body = loadFont(regular, regularDebian, 14.f);
         if (!body)
             body = io.Fonts->AddFontDefault();
-        ImFont* title =
-            io.Fonts->AddFontFromFileTTF("/usr/share/fonts/TTF/DejaVuSans-Bold.ttf", 22.f);
-        if (!title) {
-            title = io.Fonts->AddFontFromFileTTF(
-                "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 22.f);
-        }
+        ImFont* caption = loadFont(regular, regularDebian, 12.f);
+        if (!caption)
+            caption = body;
+        ImFont* title = loadFont("/usr/share/fonts/TTF/DejaVuSans-Bold.ttf",
+                                 "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 18.f);
         if (!title)
             title = body;
         io.FontDefault = body;
@@ -310,7 +333,7 @@ class HudHarness final {
             kue::internalhud::MenuRasterStatus::Success) {
             std::abort();
         }
-        kue::ui::setFonts({.body = body, .title = title});
+        kue::ui::setFonts({.body = body, .title = title, .caption = caption});
         kue::ui::applyTheme();
     }
 
@@ -318,7 +341,7 @@ class HudHarness final {
         if (!mContext)
             return;
         ImGui::SetCurrentContext(mContext);
-        kue::ui::setFonts({.body = nullptr, .title = nullptr});
+        kue::ui::setFonts({.body = nullptr, .title = nullptr, .caption = nullptr});
         mRenderer.clearFontAtlas();
         ImGui::DestroyContext(mContext);
         mContext = nullptr;
@@ -359,9 +382,9 @@ void testExactPixelsAndConsumerRecovery(TestRun& run) {
     run.expect(first.frame.revision != 0,
                "the first accepted pixels carry a nonzero consumer revision");
     const std::uint64_t hash = pixelHash(first.frame);
-    if (hash != 422108125814630585ULL)
+    if (hash != 2276392010785326953ULL)
         std::cerr << "actual pixel hash: " << hash << '\n';
-    run.expect(hash == 422108125814630585ULL,
+    run.expect(hash == 2276392010785326953ULL,
                "the representative menu preserves its exact RGBA hash");
 
     RenderResult previous = first;
@@ -588,7 +611,8 @@ void testRejectedConfigurationAndTabState(TestRun& run) {
         static_cast<void>(
             successfulRender(run, harness, {}, "the configuration rejection fixture initializes"));
         const bool initialStamina = harness.config().infiniteStamina;
-        const RenderResult rejected = harness.render({700.f, 449.f, true, 0.f}, invalidateTexture);
+        const RenderResult rejected =
+            harness.render({kStaminaSwitch.x, kStaminaSwitch.y, true, 0.f}, invalidateTexture);
         run.expect(rejected.status == kue::internalhud::MenuRasterStatus::UnsupportedTexture,
                    "a config edit with an unsupported raster texture is rejected");
         run.expect(harness.config().infiniteStamina == initialStamina,
@@ -600,10 +624,12 @@ void testRejectedConfigurationAndTabState(TestRun& run) {
         harness.recreateContext();
         static_cast<void>(
             successfulRender(run, harness, {}, "the recreated configuration fixture initializes"));
-        const RenderResult accepted = successfulRender(run, harness, {700.f, 449.f, true, 0.f},
-                                                       "the retried configuration press renders");
-        const RenderResult release = successfulRender(run, harness, {700.f, 449.f, false, 0.f},
-                                                      "the retried configuration release renders");
+        const RenderResult accepted =
+            successfulRender(run, harness, {kStaminaSwitch.x, kStaminaSwitch.y, true, 0.f},
+                             "the retried configuration press renders");
+        const RenderResult release =
+            successfulRender(run, harness, {kStaminaSwitch.x, kStaminaSwitch.y, false, 0.f},
+                             "the retried configuration release renders");
         run.expect(accepted.effects.configurationChanged,
                    "the retried ordinary edit commits exactly once");
         run.expect(!accepted.effects.explicitSaveRequested,
@@ -627,7 +653,8 @@ void testRejectedConfigurationAndTabState(TestRun& run) {
         const RenderResult self =
             successfulRender(run, harness, {}, "the tab rejection fixture initializes");
         const std::uint64_t selfHash = pixelHash(self.frame);
-        const RenderResult rejected = harness.render({1102.f, 382.f, true, 0.f}, invalidateTexture);
+        const RenderResult rejected =
+            harness.render({kSettingsPage.x, kSettingsPage.y, true, 0.f}, invalidateTexture);
         run.expect(rejected.status == kue::internalhud::MenuRasterStatus::UnsupportedTexture,
                    "a tab change with an unsupported raster texture is rejected");
         harness.recreateContext();
@@ -636,9 +663,11 @@ void testRejectedConfigurationAndTabState(TestRun& run) {
         run.expect(pixelHash(afterRejection.frame) == selfHash,
                    "a rejected tab change leaves the live tab observable unchanged");
 
-        const RenderResult accepted = successfulRender(
-            run, harness, {1102.f, 382.f, true, 0.f}, "the tab change succeeds on its first retry");
-        static_cast<void>(successfulRender(run, harness, {1102.f, 382.f, false, 0.f},
+        const RenderResult accepted =
+            successfulRender(run, harness, {kSettingsPage.x, kSettingsPage.y, true, 0.f},
+                             "the tab change succeeds on its first retry");
+        static_cast<void>(successfulRender(run, harness,
+                                           {kSettingsPage.x, kSettingsPage.y, false, 0.f},
                                            "the tab retry release renders"));
         run.expect(pixelHash(accepted.frame) != selfHash,
                    "the accepted tab retry changes the visible menu exactly once");
@@ -650,14 +679,16 @@ void testRejectedActionAndSaveState(TestRun& run) {
         HudHarness harness;
         static_cast<void>(
             successfulRender(run, harness, {}, "the action rejection fixture initializes"));
-        static_cast<void>(successfulRender(run, harness, {760.f, 382.f, true, 0.f},
+        static_cast<void>(successfulRender(run, harness,
+                                           {kPlayersPage.x, kPlayersPage.y, true, 0.f},
                                            "the players-tab setup press renders"));
-        static_cast<void>(successfulRender(run, harness, {760.f, 382.f, false, 0.f},
+        static_cast<void>(successfulRender(run, harness,
+                                           {kPlayersPage.x, kPlayersPage.y, false, 0.f},
                                            "the players-tab setup release renders"));
-        static_cast<void>(successfulRender(run, harness, {1200.f, 661.f, true, 0.f},
+        static_cast<void>(successfulRender(run, harness, {kKillPlayer.x, kKillPlayer.y, true, 0.f},
                                            "the rejected action setup press renders"));
         const RenderResult rejected =
-            harness.render({1200.f, 661.f, false, 0.f}, invalidateTexture);
+            harness.render({kKillPlayer.x, kKillPlayer.y, false, 0.f}, invalidateTexture);
         run.expect(rejected.status == kue::internalhud::MenuRasterStatus::UnsupportedTexture,
                    "an action click with an unsupported raster texture is rejected");
         kue::PlayerActionRequest action;
@@ -667,9 +698,9 @@ void testRejectedActionAndSaveState(TestRun& run) {
         harness.recreateContext();
         static_cast<void>(successfulRender(run, harness, {},
                                            "the recreated action rejection fixture initializes"));
-        static_cast<void>(successfulRender(run, harness, {1200.f, 661.f, true, 0.f},
+        static_cast<void>(successfulRender(run, harness, {kKillPlayer.x, kKillPlayer.y, true, 0.f},
                                            "the retried action setup press renders"));
-        static_cast<void>(successfulRender(run, harness, {1200.f, 661.f, false, 0.f},
+        static_cast<void>(successfulRender(run, harness, {kKillPlayer.x, kKillPlayer.y, false, 0.f},
                                            "the rejected action succeeds on its first retry"));
         run.expect(harness.interface().readAction(action) &&
                        action.action == kue::PlayerAction::Kill,
@@ -682,13 +713,17 @@ void testRejectedActionAndSaveState(TestRun& run) {
         HudHarness harness;
         static_cast<void>(
             successfulRender(run, harness, {}, "the save rejection fixture initializes"));
-        static_cast<void>(successfulRender(run, harness, {1102.f, 382.f, true, 0.f},
+        static_cast<void>(successfulRender(run, harness,
+                                           {kSettingsPage.x, kSettingsPage.y, true, 0.f},
                                            "the settings-tab setup press renders"));
-        static_cast<void>(successfulRender(run, harness, {1102.f, 382.f, false, 0.f},
+        static_cast<void>(successfulRender(run, harness,
+                                           {kSettingsPage.x, kSettingsPage.y, false, 0.f},
                                            "the settings-tab setup release renders"));
-        static_cast<void>(successfulRender(run, harness, {670.f, 611.f, true, 0.f},
+        static_cast<void>(successfulRender(run, harness,
+                                           {kSaveSettings.x, kSaveSettings.y, true, 0.f},
                                            "the rejected save setup press renders"));
-        const RenderResult rejected = harness.render({670.f, 611.f, false, 0.f}, invalidateTexture);
+        const RenderResult rejected =
+            harness.render({kSaveSettings.x, kSaveSettings.y, false, 0.f}, invalidateTexture);
         run.expect(rejected.status == kue::internalhud::MenuRasterStatus::UnsupportedTexture,
                    "an explicit-save click with an unsupported raster texture is rejected");
         run.expect(!rejected.effects.explicitSaveRequested,
@@ -699,10 +734,11 @@ void testRejectedActionAndSaveState(TestRun& run) {
         harness.recreateContext();
         static_cast<void>(
             successfulRender(run, harness, {}, "the recreated save rejection fixture initializes"));
-        static_cast<void>(successfulRender(run, harness, {670.f, 611.f, true, 0.f},
+        static_cast<void>(successfulRender(run, harness,
+                                           {kSaveSettings.x, kSaveSettings.y, true, 0.f},
                                            "the retried save setup press renders"));
         const RenderResult accepted =
-            successfulRender(run, harness, {670.f, 611.f, false, 0.f},
+            successfulRender(run, harness, {kSaveSettings.x, kSaveSettings.y, false, 0.f},
                              "the rejected save succeeds on its first retry");
         const RenderResult idle =
             successfulRender(run, harness, {}, "the accepted save idle frame renders");
@@ -713,6 +749,53 @@ void testRejectedActionAndSaveState(TestRun& run) {
         run.expect(!idle.effects.explicitSaveRequested,
                    "the accepted explicit-save request is consumed exactly once");
     }
+}
+
+void openItemsPage(TestRun& run, HudHarness& harness) {
+    static_cast<void>(successfulRender(run, harness, {}, "the items fixture initializes"));
+    static_cast<void>(successfulRender(run, harness, {kItemsPage.x, kItemsPage.y, true, 0.f},
+                                       "the items-page press renders"));
+    static_cast<void>(successfulRender(run, harness, {kItemsPage.x, kItemsPage.y, false, 0.f},
+                                       "the items-page release renders"));
+    static_cast<void>(successfulRender(run, harness, {}, "the items page settles"));
+}
+
+void testModelPreviewRequest(TestRun& run) {
+    run.expect(gCatalogs.beginItemCatalog() == kue::CatalogBeginResult::Begun,
+               "a preview item catalog begins");
+    run.expect(
+        gCatalogs.reportItem({901U}, {"Airhorn"}).result == kue::CatalogReportResult::Recorded &&
+            gCatalogs.reportItem({902U}, {"Bell"}).result == kue::CatalogReportResult::Recorded,
+        "two preview items are staged");
+    run.expect(gCatalogs.commitItemCatalog().result == kue::CatalogCommitResult::Committed,
+               "a preview item catalog commits");
+    {
+        HudHarness harness;
+        harness.setWorldFeature(kue::WorldFeature::Host);
+        static_cast<void>(successfulRender(run, harness, {}, "the preview fixture initializes"));
+        run.expect(!harness.interface().preview(),
+                   "a page without a spawn list requests no model preview");
+        openItemsPage(run, harness);
+        run.expect(!harness.interface().preview(),
+                   "a spawn list requests no model preview while previews are unsupported");
+    }
+    {
+        HudHarness harness;
+        harness.setWorldFeature(kue::WorldFeature::Host);
+        harness.setWorldFeature(kue::WorldFeature::ModelPreviews);
+        openItemsPage(run, harness);
+        const std::optional<kue::ui::MenuPreview> preview = harness.interface().preview();
+        const kue::ui::MenuRectangle menu = harness.interface().menuRectangle();
+        run.expect(preview && preview->kind == kue::ui::PreviewKind::Item &&
+                       preview->catalogIndex == 0U,
+                   "the items page requests a preview of the selected item");
+        run.expect(preview && preview->rectangle.width > 0.f && preview->rectangle.height > 0.f &&
+                       preview->rectangle.x >= menu.x && preview->rectangle.y >= menu.y &&
+                       preview->rectangle.x + preview->rectangle.width <= menu.x + menu.width &&
+                       preview->rectangle.y + preview->rectangle.height <= menu.y + menu.height,
+                   "the preview box lies inside the menu");
+    }
+    gCatalogs.resetForSessionEnd();
 }
 
 void testSteadyRenderPerformance(TestRun& run) {
@@ -772,6 +855,7 @@ int main() {
     testSaveScheduleSeparation(run);
     testRejectedConfigurationAndTabState(run);
     testRejectedActionAndSaveState(run);
+    testModelPreviewRequest(run);
     if (run.failures() == 0)
         testSteadyRenderPerformance(run);
     return run.result();

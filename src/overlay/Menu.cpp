@@ -13,6 +13,7 @@
 #include <cstring>
 #include <limits>
 #include <optional>
+#include <span>
 
 namespace kue::ui {
 
@@ -20,213 +21,619 @@ namespace {
 
 constexpr float kMenuWidth = 720.f;
 constexpr float kMenuHeight = 440.f;
+constexpr float kSidebarWidth = 132.f;
+constexpr float kHeaderHeight = 38.f;
+constexpr float kFooterHeight = 26.f;
+constexpr float kPagePadding = 12.f;
+constexpr float kColumnGap = 10.f;
+constexpr float kRowHeight = 24.f;
+constexpr float kListRowHeight = 20.f;
+constexpr float kCardPadding = 6.f;
+constexpr float kListWidth = 236.f;
+constexpr float kPreviewHeight = 140.f;
+constexpr float kLabelWidth = 104.f;
+constexpr float kPoundsPerCarryUnit = 105.f;
 
-struct RgbaColor {
-    ImU32 red;
-    ImU32 green;
-    ImU32 blue;
-    ImU32 alpha;
-};
-
-template <typename T> struct SliderRange {
-    T minimum;
-    T maximum;
-};
-
-constexpr ImU32 rgba(RgbaColor color) noexcept {
-    return (color.red << IM_COL32_R_SHIFT) | (color.green << IM_COL32_G_SHIFT) |
-           (color.blue << IM_COL32_B_SHIFT) | (color.alpha << IM_COL32_A_SHIFT);
-}
-
-constexpr ImU32 kAccent = rgba({.red = 204u, .green = 46u, .blue = 56u, .alpha = 255u});
-constexpr ImU32 kText = rgba({.red = 230u, .green = 230u, .blue = 235u, .alpha = 255u});
-constexpr ImU32 kRowBg = rgba({.red = 24u, .green = 24u, .blue = 27u, .alpha = 255u});
-constexpr ImU32 kRowHover = rgba({.red = 32u, .green = 32u, .blue = 36u, .alpha = 255u});
-
-struct ActionButtonDefinition {
-    const char* label;
-    PlayerAction action;
-};
-
-constexpr std::array<ActionButtonDefinition, 20> kClientTrollActions{{
-    {"Toggle Ship Horn", PlayerAction::ToggleShipHorn},
-    {"Toggle Cruiser Horn", PlayerAction::ToggleCarHorn},
-    {"Toggle Terminal Sound Spam", PlayerAction::ToggleTerminalSound},
-    {"Toggle Ship Lights", PlayerAction::ToggleShipLights},
-    {"Force Small Bridge Fall", PlayerAction::ForceSmallBridgeFall},
-    {"Blow Up All Landmines", PlayerAction::BlowUpAllMines},
-    {"Toggle All Landmines", PlayerAction::ToggleAllMines},
-    {"Toggle All Turrets", PlayerAction::ToggleAllTurrets},
-    {"Toggle Berserk Turrets", PlayerAction::BerserkAllTurrets},
-    {"Toggle Open Ship Door In Space", PlayerAction::OpenShipDoorSpace},
-    {"Force Company Tentacle Attack", PlayerAction::ForceTentacleAttack},
-    {"Spawn Masked From Masks", PlayerAction::SpawnMaskedEnemy},
-    {"Toggle Mineshaft Elevator", PlayerAction::ToggleMineshaftElevator},
-    {"Toggle Vehicle Magnet", PlayerAction::ToggleVehicleMagnet},
-    {"Shoot All Shotguns", PlayerAction::ShootAllShotguns},
-    {"Toggle Shotgun Spam", PlayerAction::ToggleShotgunSpam},
-    {"Explode Cruiser", PlayerAction::ExplodeCruiser},
-    {"Toggle Slide Taunt", PlayerAction::SlideTaunt},
-    {"Explode All Jetpacks", PlayerAction::ExplodeAllJetpacks},
-    {"Toggle Explode Jetpacks On Grab", PlayerAction::ToggleExplodeJetpacksOnGrab},
-}};
-
-constexpr std::array<ActionButtonDefinition, 5> kHostTrollActions{{
-    {"Toggle Deposit Desk Sound Spam", PlayerAction::ToggleDepositDeskSound},
-    {"Toggle Factory Lights", PlayerAction::ToggleFactoryLights},
-    {"Force Main Bridge Fall", PlayerAction::ForceBridgeFall},
-    {"Force Eject / Fire Everyone", PlayerAction::EjectEveryone},
-    {"Spawn Hoarding Bug Infestation", PlayerAction::SpawnHoardingBugInfestation},
-}};
-
-constexpr bool trollActionsHaveNoPayload() noexcept {
-    for (const ActionButtonDefinition& definition : kClientTrollActions)
-        if (playerActionPayloadKind(definition.action) != PlayerActionPayloadKind::None)
-            return false;
-    for (const ActionButtonDefinition& definition : kHostTrollActions)
-        if (playerActionPayloadKind(definition.action) != PlayerActionPayloadKind::None)
-            return false;
-    return true;
-}
-
-static_assert(trollActionsHaveNoPayload());
-
-struct MenuKeyBinding {
-    ImGuiKey input;
+struct MenuKeyName {
     MenuKey key;
     const char* name;
 };
 
-constexpr std::array<MenuKeyBinding, 52> kMenuKeyBindings = {{
-    {ImGuiKey_Insert, MenuKey::Insert, "Insert"},
-    {ImGuiKey_Tab, MenuKey::Tab, "Tab"},
-    {ImGuiKey_Enter, MenuKey::Enter, "Enter"},
-    {ImGuiKey_Space, MenuKey::Space, "Space"},
-    {ImGuiKey_F1, MenuKey::F1, "F1"},
-    {ImGuiKey_F2, MenuKey::F2, "F2"},
-    {ImGuiKey_F3, MenuKey::F3, "F3"},
-    {ImGuiKey_F4, MenuKey::F4, "F4"},
-    {ImGuiKey_F5, MenuKey::F5, "F5"},
-    {ImGuiKey_F6, MenuKey::F6, "F6"},
-    {ImGuiKey_F7, MenuKey::F7, "F7"},
-    {ImGuiKey_F8, MenuKey::F8, "F8"},
-    {ImGuiKey_F9, MenuKey::F9, "F9"},
-    {ImGuiKey_F10, MenuKey::F10, "F10"},
-    {ImGuiKey_F11, MenuKey::F11, "F11"},
-    {ImGuiKey_F12, MenuKey::F12, "F12"},
-    {ImGuiKey_A, MenuKey::A, "A"},
-    {ImGuiKey_B, MenuKey::B, "B"},
-    {ImGuiKey_C, MenuKey::C, "C"},
-    {ImGuiKey_D, MenuKey::D, "D"},
-    {ImGuiKey_E, MenuKey::E, "E"},
-    {ImGuiKey_F, MenuKey::F, "F"},
-    {ImGuiKey_G, MenuKey::G, "G"},
-    {ImGuiKey_H, MenuKey::H, "H"},
-    {ImGuiKey_I, MenuKey::I, "I"},
-    {ImGuiKey_J, MenuKey::J, "J"},
-    {ImGuiKey_K, MenuKey::K, "K"},
-    {ImGuiKey_L, MenuKey::L, "L"},
-    {ImGuiKey_M, MenuKey::M, "M"},
-    {ImGuiKey_N, MenuKey::N, "N"},
-    {ImGuiKey_O, MenuKey::O, "O"},
-    {ImGuiKey_P, MenuKey::P, "P"},
-    {ImGuiKey_Q, MenuKey::Q, "Q"},
-    {ImGuiKey_R, MenuKey::R, "R"},
-    {ImGuiKey_S, MenuKey::S, "S"},
-    {ImGuiKey_T, MenuKey::T, "T"},
-    {ImGuiKey_U, MenuKey::U, "U"},
-    {ImGuiKey_V, MenuKey::V, "V"},
-    {ImGuiKey_W, MenuKey::W, "W"},
-    {ImGuiKey_X, MenuKey::X, "X"},
-    {ImGuiKey_Y, MenuKey::Y, "Y"},
-    {ImGuiKey_Z, MenuKey::Z, "Z"},
-    {ImGuiKey_0, MenuKey::Digit0, "0"},
-    {ImGuiKey_1, MenuKey::Digit1, "1"},
-    {ImGuiKey_2, MenuKey::Digit2, "2"},
-    {ImGuiKey_3, MenuKey::Digit3, "3"},
-    {ImGuiKey_4, MenuKey::Digit4, "4"},
-    {ImGuiKey_5, MenuKey::Digit5, "5"},
-    {ImGuiKey_6, MenuKey::Digit6, "6"},
-    {ImGuiKey_7, MenuKey::Digit7, "7"},
-    {ImGuiKey_8, MenuKey::Digit8, "8"},
-    {ImGuiKey_9, MenuKey::Digit9, "9"},
+constexpr std::array<MenuKeyName, 52> kMenuKeyNames = {{
+    {MenuKey::Insert, "Insert"}, {MenuKey::Tab, "Tab"},  {MenuKey::Enter, "Enter"},
+    {MenuKey::Space, "Space"},   {MenuKey::F1, "F1"},    {MenuKey::F2, "F2"},
+    {MenuKey::F3, "F3"},         {MenuKey::F4, "F4"},    {MenuKey::F5, "F5"},
+    {MenuKey::F6, "F6"},         {MenuKey::F7, "F7"},    {MenuKey::F8, "F8"},
+    {MenuKey::F9, "F9"},         {MenuKey::F10, "F10"},  {MenuKey::F11, "F11"},
+    {MenuKey::F12, "F12"},       {MenuKey::A, "A"},      {MenuKey::B, "B"},
+    {MenuKey::C, "C"},           {MenuKey::D, "D"},      {MenuKey::E, "E"},
+    {MenuKey::F, "F"},           {MenuKey::G, "G"},      {MenuKey::H, "H"},
+    {MenuKey::I, "I"},           {MenuKey::J, "J"},      {MenuKey::K, "K"},
+    {MenuKey::L, "L"},           {MenuKey::M, "M"},      {MenuKey::N, "N"},
+    {MenuKey::O, "O"},           {MenuKey::P, "P"},      {MenuKey::Q, "Q"},
+    {MenuKey::R, "R"},           {MenuKey::S, "S"},      {MenuKey::T, "T"},
+    {MenuKey::U, "U"},           {MenuKey::V, "V"},      {MenuKey::W, "W"},
+    {MenuKey::X, "X"},           {MenuKey::Y, "Y"},      {MenuKey::Z, "Z"},
+    {MenuKey::Digit0, "0"},      {MenuKey::Digit1, "1"}, {MenuKey::Digit2, "2"},
+    {MenuKey::Digit3, "3"},      {MenuKey::Digit4, "4"}, {MenuKey::Digit5, "5"},
+    {MenuKey::Digit6, "6"},      {MenuKey::Digit7, "7"}, {MenuKey::Digit8, "8"},
+    {MenuKey::Digit9, "9"},
 }};
 
 const char* menuKeyName(MenuKey key) {
-    for (const MenuKeyBinding& binding : kMenuKeyBindings) {
-        if (binding.key == key)
-            return binding.name;
+    for (const MenuKeyName& entry : kMenuKeyNames) {
+        if (entry.key == key) {
+            return entry.name;
+        }
     }
     return "Key";
 }
 
-bool translateMenuKey(ImGuiKey input, MenuKey& output) {
-    for (const MenuKeyBinding& binding : kMenuKeyBindings) {
-        if (binding.input == input) {
-            output = binding.key;
-            return true;
-        }
-    }
-    return false;
+ImU32 color(const ImVec4& value) {
+    return ImGui::ColorConvertFloat4ToU32(value);
 }
 
-bool toggleRow(const char* label, bool& value) {
-    const float availableWidth = ImGui::GetContentRegionAvail().x;
-    ImGui::PushID(label);
-    ImGui::InvisibleButton("##row", ImVec2(availableWidth, 28.f));
-    const bool hovered = ImGui::IsItemHovered();
-    bool changed = false;
-    if (ImGui::IsItemClicked()) {
-        value = !value;
-        changed = true;
+enum class Icon : std::uint8_t {
+    Self,
+    Visuals,
+    Players,
+    Enemies,
+    Items,
+    Moons,
+    World,
+    Settings,
+    Chevron,
+    Sun,
+    Move,
+    Battery,
+    Sound,
+    Pulse,
+    Bolt,
+    Palette,
+    Bell,
+    Info,
+    Pin,
+    List,
+    Coin,
+    Building,
+    Ship,
+    Car,
+    Cog,
+    Key,
+    Gauge,
+    Save,
+    Keyboard,
+    Route
+};
+
+constexpr float kPi = 3.14159265358979f;
+constexpr float kIconStroke = 1.3f;
+constexpr std::array<ImVec2, 8> kCompass = {{
+    {1.f, 0.f},
+    {0.70710678f, 0.70710678f},
+    {0.f, 1.f},
+    {-0.70710678f, 0.70710678f},
+    {-1.f, 0.f},
+    {-0.70710678f, -0.70710678f},
+    {0.f, -1.f},
+    {0.70710678f, -0.70710678f},
+}};
+
+struct IconPen {
+    ImDrawList* drawList;
+    ImVec2 center;
+    float scale;
+    ImU32 tint;
+
+    [[nodiscard]] ImVec2 at(float x, float y) const {
+        return {center.x + x * scale, center.y + y * scale};
     }
-    ImDrawList* drawList = ImGui::GetWindowDrawList();
-    const ImVec2 rowMinimum = ImGui::GetItemRectMin();
-    const ImVec2 rowMaximum = ImGui::GetItemRectMax();
-    drawList->AddRectFilled(rowMinimum, rowMaximum, hovered ? kRowHover : kRowBg, 4.f);
-    drawList->AddText(ImVec2(rowMinimum.x + 10.f, rowMinimum.y + 6.f), kText, label);
-    const ImVec2 toggleSize(34.f, 18.f);
-    const ImVec2 togglePosition(rowMaximum.x - 44.f, rowMinimum.y + 5.f);
-    const float radius = toggleSize.y * 0.5f;
-    drawList->AddRectFilled(
-        togglePosition, ImVec2(togglePosition.x + toggleSize.x, togglePosition.y + toggleSize.y),
-        value ? kAccent : rgba({.red = 48u, .green = 48u, .blue = 54u, .alpha = 255u}), radius);
-    const float knobCenterX =
-        value ? togglePosition.x + toggleSize.x - radius : togglePosition.x + radius;
-    drawList->AddCircleFilled(ImVec2(knobCenterX, togglePosition.y + radius), radius - 2.5f,
-                              rgba({.red = 240u, .green = 240u, .blue = 245u, .alpha = 255u}));
-    ImGui::Dummy(ImVec2(0.f, 4.f));
+
+    void line(ImVec2 from, ImVec2 to) const {
+        drawList->AddLine(at(from.x, from.y), at(to.x, to.y), tint, kIconStroke);
+    }
+
+    void ring(ImVec2 middle, float radius) const {
+        drawList->AddCircle(at(middle.x, middle.y), radius * scale, tint, 16, kIconStroke);
+    }
+
+    void dot(ImVec2 middle, float radius) const {
+        drawList->AddCircleFilled(at(middle.x, middle.y), radius * scale, tint, 10);
+    }
+
+    void box(ImVec2 minimum, ImVec2 maximum, float rounding) const {
+        drawList->AddRect(at(minimum.x, minimum.y), at(maximum.x, maximum.y), tint,
+                          rounding * scale, ImDrawFlags_None, kIconStroke);
+    }
+
+    void block(ImVec2 minimum, ImVec2 maximum) const {
+        drawList->AddRectFilled(at(minimum.x, minimum.y), at(maximum.x, maximum.y), tint);
+    }
+
+    void arc(ImVec2 middle, float radius, float fromTurn, float toTurn) const {
+        drawList->PathArcTo(at(middle.x, middle.y), radius * scale, kPi * fromTurn, kPi * toTurn,
+                            10);
+        drawList->PathStroke(tint, ImDrawFlags_None, kIconStroke);
+    }
+
+    void path(std::span<const ImVec2> points, ImDrawFlags flags) const {
+        for (const ImVec2& point : points) {
+            drawList->PathLineTo(at(point.x, point.y));
+        }
+        drawList->PathStroke(tint, flags, kIconStroke);
+    }
+
+    void person(ImVec2 middle, float size) const {
+        ring({middle.x, middle.y - 3.2f * size}, 2.4f * size);
+        arc({middle.x, middle.y + 6.2f * size}, 4.8f * size, 1.f, 2.f);
+    }
+
+    void rays(float inner, float outer) const {
+        for (const ImVec2& heading : kCompass) {
+            line({heading.x * inner, heading.y * inner}, {heading.x * outer, heading.y * outer});
+        }
+    }
+};
+
+void drawIcon(ImDrawList* drawList, Icon icon, ImVec2 center, ImU32 tint, float scale = 1.f) {
+    const IconPen pen{drawList, center, scale, tint};
+    switch (icon) {
+    case Icon::Self:
+        pen.person({0.f, 0.f}, 1.f);
+        return;
+    case Icon::Players:
+        pen.person({-2.6f, 0.6f}, 0.82f);
+        pen.person({3.2f, -0.4f}, 0.82f);
+        return;
+    case Icon::Visuals:
+        pen.arc({0.f, 5.2f}, 8.2f, 1.22f, 1.78f);
+        pen.arc({0.f, -5.2f}, 8.2f, 0.22f, 0.78f);
+        pen.dot({0.f, 0.f}, 2.f);
+        return;
+    case Icon::Enemies:
+        pen.ring({0.f, -1.2f}, 5.f);
+        pen.box({-2.6f, 3.2f}, {2.6f, 6.2f}, 0.f);
+        pen.dot({-2.f, -1.2f}, 1.3f);
+        pen.dot({2.f, -1.2f}, 1.3f);
+        return;
+    case Icon::Items:
+        pen.box({-5.5f, -5.f}, {5.5f, 5.5f}, 1.f);
+        pen.line({-5.5f, -1.4f}, {5.5f, -1.4f});
+        pen.line({0.f, -5.f}, {0.f, -1.4f});
+        return;
+    case Icon::Moons:
+        pen.ring({0.f, 0.f}, 4.2f);
+        pen.line({-7.f, 2.6f}, {-4.4f, 1.6f});
+        pen.line({4.4f, -1.6f}, {7.f, -2.6f});
+        return;
+    case Icon::World:
+        pen.ring({0.f, 0.f}, 5.6f);
+        drawList->AddEllipse(center, ImVec2(2.5f * scale, 5.6f * scale), tint, 0.f, 14,
+                             kIconStroke);
+        pen.line({-5.6f, 0.f}, {5.6f, 0.f});
+        return;
+    case Icon::Settings:
+        pen.line({-6.f, -4.f}, {6.f, -4.f});
+        pen.line({-6.f, 0.f}, {6.f, 0.f});
+        pen.line({-6.f, 4.f}, {6.f, 4.f});
+        pen.dot({2.5f, -4.f}, 1.9f);
+        pen.dot({-2.5f, 0.f}, 1.9f);
+        pen.dot({3.5f, 4.f}, 1.9f);
+        return;
+    case Icon::Chevron:
+        pen.line({-1.8f, -3.2f}, {1.6f, 0.f});
+        pen.line({1.6f, 0.f}, {-1.8f, 3.2f});
+        return;
+    case Icon::Sun:
+        pen.dot({0.f, 0.f}, 3.6f);
+        pen.rays(5.4f, 7.6f);
+        return;
+    case Icon::Move:
+        pen.line({-5.f, -4.f}, {-1.f, 0.f});
+        pen.line({-1.f, 0.f}, {-5.f, 4.f});
+        pen.line({0.5f, -4.f}, {4.5f, 0.f});
+        pen.line({4.5f, 0.f}, {0.5f, 4.f});
+        return;
+    case Icon::Battery:
+        pen.box({-6.f, -3.5f}, {4.5f, 3.5f}, 1.f);
+        pen.block({4.5f, -1.5f}, {6.2f, 1.5f});
+        pen.block({-4.2f, -1.8f}, {0.5f, 1.8f});
+        return;
+    case Icon::Sound: {
+        constexpr std::array<ImVec2, 6> speaker = {
+            {{-6.f, -2.f}, {-3.5f, -2.f}, {-0.5f, -5.f}, {-0.5f, 5.f}, {-3.5f, 2.f}, {-6.f, 2.f}}};
+        pen.path(speaker, ImDrawFlags_Closed);
+        pen.arc({0.5f, 0.f}, 3.f, -0.25f, 0.25f);
+        pen.arc({0.5f, 0.f}, 5.6f, -0.25f, 0.25f);
+        return;
+    }
+    case Icon::Pulse: {
+        constexpr std::array<ImVec2, 6> beat = {
+            {{-6.5f, 0.f}, {-3.f, 0.f}, {-1.4f, -4.5f}, {0.8f, 4.5f}, {2.4f, 0.f}, {6.5f, 0.f}}};
+        pen.path(beat, ImDrawFlags_None);
+        return;
+    }
+    case Icon::Bolt: {
+        constexpr std::array<ImVec2, 6> bolt = {{{1.5f, -6.f},
+                                                 {-3.5f, 0.8f},
+                                                 {-0.3f, 0.8f},
+                                                 {-1.5f, 6.f},
+                                                 {3.5f, -0.8f},
+                                                 {0.3f, -0.8f}}};
+        pen.path(bolt, ImDrawFlags_Closed);
+        return;
+    }
+    case Icon::Palette:
+        pen.ring({0.f, 0.f}, 5.6f);
+        pen.dot({-2.2f, -1.6f}, 1.2f);
+        pen.dot({2.2f, -1.6f}, 1.2f);
+        pen.dot({0.f, 2.4f}, 1.2f);
+        return;
+    case Icon::Bell: {
+        pen.arc({0.f, -1.f}, 4.f, 1.f, 2.f);
+        constexpr std::array<ImVec2, 6> skirt = {
+            {{4.f, -1.f}, {4.f, 2.f}, {5.6f, 3.8f}, {-5.6f, 3.8f}, {-4.f, 2.f}, {-4.f, -1.f}}};
+        pen.path(skirt, ImDrawFlags_None);
+        pen.dot({0.f, 5.6f}, 1.1f);
+        return;
+    }
+    case Icon::Info:
+        pen.ring({0.f, 0.f}, 5.6f);
+        pen.dot({0.f, -2.7f}, 0.9f);
+        pen.line({0.f, -0.6f}, {0.f, 3.2f});
+        return;
+    case Icon::Pin:
+        pen.ring({0.f, -1.6f}, 3.7f);
+        pen.line({-3.f, 0.6f}, {0.f, 6.2f});
+        pen.line({3.f, 0.6f}, {0.f, 6.2f});
+        pen.dot({0.f, -1.6f}, 1.2f);
+        return;
+    case Icon::List:
+        for (const float row : {-4.f, 0.f, 4.f}) {
+            pen.dot({-5.2f, row}, 1.f);
+            pen.line({-2.4f, row}, {6.2f, row});
+        }
+        return;
+    case Icon::Coin:
+        pen.ring({0.f, 0.f}, 5.6f);
+        pen.ring({0.f, 0.f}, 2.4f);
+        return;
+    case Icon::Building:
+        pen.box({-4.6f, -6.f}, {4.6f, 6.f}, 0.f);
+        pen.block({-2.6f, -4.f}, {-0.8f, -2.2f});
+        pen.block({0.8f, -4.f}, {2.6f, -2.2f});
+        pen.block({-2.6f, -0.8f}, {-0.8f, 1.f});
+        pen.block({0.8f, -0.8f}, {2.6f, 1.f});
+        pen.block({-1.f, 3.2f}, {1.f, 6.f});
+        return;
+    case Icon::Ship: {
+        constexpr std::array<ImVec2, 5> hull = {
+            {{0.f, -6.5f}, {3.f, -2.f}, {3.f, 3.2f}, {-3.f, 3.2f}, {-3.f, -2.f}}};
+        pen.path(hull, ImDrawFlags_Closed);
+        pen.line({-3.f, 0.8f}, {-5.6f, 4.6f});
+        pen.line({-5.6f, 4.6f}, {-3.f, 3.2f});
+        pen.line({3.f, 0.8f}, {5.6f, 4.6f});
+        pen.line({5.6f, 4.6f}, {3.f, 3.2f});
+        pen.dot({0.f, -1.2f}, 1.2f);
+        pen.line({0.f, 4.4f}, {0.f, 6.4f});
+        return;
+    }
+    case Icon::Car: {
+        pen.box({-6.2f, -1.f}, {6.2f, 3.f}, 1.f);
+        constexpr std::array<ImVec2, 4> roof = {
+            {{-3.6f, -1.f}, {-2.2f, -4.2f}, {2.6f, -4.2f}, {4.2f, -1.f}}};
+        pen.path(roof, ImDrawFlags_None);
+        pen.dot({-3.3f, 3.8f}, 1.7f);
+        pen.dot({3.3f, 3.8f}, 1.7f);
+        return;
+    }
+    case Icon::Cog:
+        pen.ring({0.f, 0.f}, 3.4f);
+        pen.rays(3.8f, 6.2f);
+        return;
+    case Icon::Key:
+        pen.ring({-3.2f, 0.f}, 2.8f);
+        pen.line({-0.4f, 0.f}, {6.4f, 0.f});
+        pen.line({3.6f, 0.f}, {3.6f, 2.8f});
+        pen.line({5.8f, 0.f}, {5.8f, 2.2f});
+        return;
+    case Icon::Gauge:
+        pen.arc({0.f, 2.6f}, 5.8f, 1.f, 2.f);
+        pen.line({0.f, 2.6f}, {3.2f, -1.6f});
+        pen.dot({0.f, 2.6f}, 1.3f);
+        return;
+    case Icon::Save:
+        pen.box({-5.6f, -5.6f}, {5.6f, 5.6f}, 1.f);
+        pen.box({-2.6f, -5.6f}, {2.6f, -2.2f}, 0.f);
+        pen.block({-3.2f, 1.4f}, {3.2f, 5.6f});
+        return;
+    case Icon::Keyboard:
+        pen.box({-6.6f, -4.2f}, {6.6f, 4.2f}, 1.5f);
+        for (const float column : {-4.f, -1.3f, 1.3f, 4.f}) {
+            pen.block({column - 0.7f, -2.2f}, {column + 0.7f, -0.8f});
+        }
+        pen.line({-3.2f, 1.8f}, {3.2f, 1.8f});
+        return;
+    case Icon::Route:
+        pen.line({-6.f, 0.f}, {5.4f, 0.f});
+        pen.line({1.6f, -3.6f}, {5.4f, 0.f});
+        pen.line({5.4f, 0.f}, {1.6f, 3.6f});
+        return;
+    }
+}
+
+float keyCapWidth(const char* key) {
+    ImFont* const caption = fonts().caption;
+    if (!caption) {
+        return 0.f;
+    }
+    return caption->CalcTextSizeA(caption->FontSize, 1000.f, 0.f, key).x + 10.f;
+}
+
+void drawKeyCap(ImDrawList* drawList, ImVec2 topLeft, const char* key) {
+    ImFont* const caption = fonts().caption;
+    if (!caption) {
+        return;
+    }
+    constexpr float height = 16.f;
+    const float width = keyCapWidth(key);
+    const ImVec2 maximum(topLeft.x + width, topLeft.y + height);
+    drawList->AddRectFilled(topLeft, maximum, color(palette::kControl), 3.f);
+    drawList->AddRect(topLeft, maximum, color(palette::kFaint), 3.f, ImDrawFlags_None, 1.f);
+    drawList->AddText(caption, caption->FontSize,
+                      ImVec2(topLeft.x + 5.f, topLeft.y + (height - caption->FontSize) * 0.5f),
+                      color(palette::kText), key);
+}
+
+void noteHint(const char*& slot, const char* hint) {
+    if (hint && ImGui::IsItemHovered()) {
+        slot = hint;
+    }
+}
+
+void sectionTitle(Icon icon, const char* label) {
+    ImFont* const caption = fonts().caption;
+    if (caption) {
+        ImGui::PushFont(caption);
+    }
+    ImGui::Dummy(ImVec2(0.f, 3.f));
+    const ImVec2 origin = ImGui::GetCursorScreenPos();
+    const float height = ImGui::GetFontSize();
+    drawIcon(ImGui::GetWindowDrawList(), icon, ImVec2(origin.x + 8.f, origin.y + height * 0.5f),
+             color(palette::kMuted), 0.8f);
+    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 19.f);
+    ImGui::PushStyleColor(ImGuiCol_Text, palette::kMuted);
+    ImGui::TextUnformatted(label);
+    ImGui::PopStyleColor();
+    ImGui::Dummy(ImVec2(0.f, 1.f));
+    if (caption) {
+        ImGui::PopFont();
+    }
+}
+
+void noteText(const char* text) {
+    ImFont* const caption = fonts().caption;
+    if (caption) {
+        ImGui::PushFont(caption);
+    }
+    ImGui::PushStyleColor(ImGuiCol_Text, palette::kMuted);
+    ImGui::PushTextWrapPos(0.f);
+    ImGui::TextUnformatted(text);
+    ImGui::PopTextWrapPos();
+    ImGui::PopStyleColor();
+    if (caption) {
+        ImGui::PopFont();
+    }
+}
+
+bool switchRow(const char* label, bool on, std::span<const char* const> keys = {}) {
+    const float width = ImGui::GetContentRegionAvail().x;
+    ImGui::PushID(label);
+    ImGui::InvisibleButton("##switch", ImVec2(width, kRowHeight));
+    const bool clicked = ImGui::IsItemClicked();
+    const bool hovered = ImGui::IsItemHovered();
+    ImGui::PopID();
+    ImDrawList* const drawList = ImGui::GetWindowDrawList();
+    const ImVec2 minimum = ImGui::GetItemRectMin();
+    const ImVec2 maximum = ImGui::GetItemRectMax();
+    if (hovered) {
+        drawList->AddRectFilled(minimum, maximum, color(palette::kControl), 3.f);
+    }
+    const float textY = minimum.y + (kRowHeight - ImGui::GetFontSize()) * 0.5f;
+    drawList->AddText(ImVec2(minimum.x + 8.f, textY), color(palette::kText), label);
+    const ImVec2 trackSize(28.f, 14.f);
+    const ImVec2 track(maximum.x - trackSize.x - 8.f,
+                       minimum.y + (kRowHeight - trackSize.y) * 0.5f);
+    const float radius = trackSize.y * 0.5f;
+    drawList->AddRectFilled(track, ImVec2(track.x + trackSize.x, track.y + trackSize.y),
+                            color(on ? palette::kAccent : palette::kSwitchOff), radius);
+    const float knobX = on ? track.x + trackSize.x - radius : track.x + radius;
+    drawList->AddCircleFilled(ImVec2(knobX, track.y + radius), radius - 2.5f,
+                              color(on ? palette::kOnAccent : palette::kMuted));
+    float keyRight = track.x - 8.f;
+    for (std::size_t index = keys.size(); index > 0; --index) {
+        const char* const key = keys[index - 1];
+        keyRight -= keyCapWidth(key);
+        drawKeyCap(drawList, ImVec2(keyRight, minimum.y + (kRowHeight - 16.f) * 0.5f), key);
+        keyRight -= 3.f;
+    }
+    return clicked;
+}
+
+enum class CommandTone : std::uint8_t { Neutral, Danger };
+
+bool commandRow(const char* label, CommandTone tone) {
+    const bool danger = tone == CommandTone::Danger;
+    ImGui::PushStyleColor(ImGuiCol_Text, danger ? palette::kDanger : palette::kText);
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered,
+                          danger ? palette::kDangerHover : palette::kControlHover);
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive,
+                          danger ? palette::kDangerHover : palette::kControlActive);
+    const bool pressed = ImGui::Button(label, ImVec2(-1.f, kRowHeight));
+    ImGui::PopStyleColor(3);
+    const ImVec2 minimum = ImGui::GetItemRectMin();
+    const ImVec2 maximum = ImGui::GetItemRectMax();
+    drawIcon(ImGui::GetWindowDrawList(), Icon::Chevron,
+             ImVec2(maximum.x - 12.f, (minimum.y + maximum.y) * 0.5f),
+             color(danger ? palette::kDanger : palette::kFaint));
+    return pressed;
+}
+
+struct IntRange {
+    int minimum;
+    int maximum;
+};
+
+struct FloatRange {
+    float minimum;
+    float maximum;
+};
+
+bool sliderRow(const char* label, int& value, IntRange range, const char* format,
+               ImGuiSliderFlags flags = ImGuiSliderFlags_None) {
+    ImGui::AlignTextToFramePadding();
+    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 8.f);
+    ImGui::TextUnformatted(label);
+    ImGui::SameLine(kLabelWidth);
+    ImGui::SetNextItemWidth(-1.f);
+    ImGui::PushID(label);
+    const bool changed =
+        ImGui::SliderInt("##value", &value, range.minimum, range.maximum, format,
+                         flags | ImGuiSliderFlags_NoInput | ImGuiSliderFlags_AlwaysClamp);
     ImGui::PopID();
     return changed;
 }
 
-void sectionLabel(const char* label) {
-    ImGui::Spacing();
-    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.80f, 0.18f, 0.22f, 1.f));
+bool sliderRow(const char* label, float& value, FloatRange range, const char* format) {
+    ImGui::AlignTextToFramePadding();
+    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 8.f);
     ImGui::TextUnformatted(label);
-    ImGui::PopStyleColor();
-    ImGui::Spacing();
+    ImGui::SameLine(kLabelWidth);
+    ImGui::SetNextItemWidth(-1.f);
+    ImGui::PushID(label);
+    const bool changed =
+        ImGui::SliderFloat("##value", &value, range.minimum, range.maximum, format,
+                           ImGuiSliderFlags_NoInput | ImGuiSliderFlags_AlwaysClamp);
+    ImGui::PopID();
+    return changed;
 }
 
-bool actionButton(const char* label, float width = -1.f) {
-    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.80f, 0.18f, 0.22f, 0.85f));
-    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.90f, 0.26f, 0.30f, 1.f));
-    ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.70f, 0.12f, 0.16f, 1.f));
-    const bool pressed = ImGui::Button(label, ImVec2(width, 0.f));
-    ImGui::PopStyleColor(3);
+void meterRow(const char* label, const char* value, float fraction) {
+    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 8.f);
+    ImGui::TextUnformatted(label);
+    const float valueWidth = ImGui::CalcTextSize(value).x;
+    ImGui::SameLine(ImGui::GetWindowWidth() - valueWidth - 20.f);
+    ImGui::TextColored(palette::kMuted, "%s", value);
+    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 8.f);
+    ImGui::ProgressBar(std::clamp(fraction, 0.f, 1.f),
+                       ImVec2(ImGui::GetContentRegionAvail().x - 8.f, 4.f), "");
+}
+
+bool beginCard(const char* id, ImVec2 size) {
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, palette::kCard);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(kCardPadding, kCardPadding));
+    const bool visible = ImGui::BeginChild(
+        id, size, ImGuiChildFlags_Borders | ImGuiChildFlags_AlwaysUseWindowPadding);
+    ImGui::PopStyleVar();
+    ImGui::PopStyleColor();
+    return visible;
+}
+
+struct ListRow {
+    const char* label;
+    const char* detail = "";
+    std::optional<ImVec4> dot = std::nullopt;
+};
+
+bool listRow(ListRow row, bool selected) {
+    ImGui::PushID(row.label);
+    const bool clicked = ImGui::Selectable("##row", selected, ImGuiSelectableFlags_None,
+                                           ImVec2(0.f, kListRowHeight));
+    ImGui::PopID();
+    ImDrawList* const drawList = ImGui::GetWindowDrawList();
+    const ImVec2 minimum = ImGui::GetItemRectMin();
+    const ImVec2 maximum = ImGui::GetItemRectMax();
+    const float middle = (minimum.y + maximum.y) * 0.5f;
+    float textX = minimum.x + 6.f;
+    if (row.dot) {
+        drawList->AddCircleFilled(ImVec2(minimum.x + 9.f, middle), 3.f, color(*row.dot), 10);
+        textX = minimum.x + 20.f;
+    }
+    const ImVec2 detailSize = ImGui::CalcTextSize(row.detail);
+    const float detailX = maximum.x - detailSize.x - 6.f;
+    const ImVec4 clip(textX, minimum.y, detailX - 6.f, maximum.y);
+    drawList->AddText(ImGui::GetFont(), ImGui::GetFontSize(),
+                      ImVec2(textX, middle - ImGui::GetFontSize() * 0.5f), color(palette::kText),
+                      row.label, nullptr, 0.f, &clip);
+    if (row.detail[0] != '\0') {
+        drawList->AddText(ImVec2(detailX, middle - detailSize.y * 0.5f), color(palette::kMuted),
+                          row.detail);
+    }
+    return clicked;
+}
+
+bool segmentButton(const char* label, bool selected, float width) {
+    ImGui::PushStyleColor(ImGuiCol_Button, selected ? palette::kAccent : palette::kControl);
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered,
+                          selected ? palette::kAccent : palette::kControlHover);
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive,
+                          selected ? palette::kAccent : palette::kControlActive);
+    ImGui::PushStyleColor(ImGuiCol_Text, selected ? palette::kOnAccent : palette::kMuted);
+    ImGui::PushStyleVar(ImGuiStyleVar_ButtonTextAlign, ImVec2(0.5f, 0.5f));
+    const bool pressed = ImGui::Button(label, ImVec2(width, 22.f));
+    ImGui::PopStyleVar();
+    ImGui::PopStyleColor(4);
     return pressed;
 }
 
-bool boundedSlider(const char* label, int& value, SliderRange<int> range, const char* format) {
-    return ImGui::SliderInt(label, &value, range.minimum, range.maximum, format,
-                            ImGuiSliderFlags_NoInput);
+float columnWidth() {
+    return (ImGui::GetContentRegionAvail().x - kColumnGap) * 0.5f;
 }
 
-bool boundedSlider(const char* label, float& value, SliderRange<float> range, const char* format) {
-    return ImGui::SliderFloat(label, &value, range.minimum, range.maximum, format,
-                              ImGuiSliderFlags_NoInput);
+const PlayerSnapshotPlayer* findPlayer(const PlayerSnapshot& players, std::uint64_t clientId) {
+    for (const PlayerSnapshotPlayer& player : players) {
+        if (player.clientId == clientId) {
+            return &player;
+        }
+    }
+    return nullptr;
 }
 
+const PlayerSnapshotPlayer* localPlayer(const PlayerSnapshot& players) {
+    for (const PlayerSnapshotPlayer& player : players) {
+        if (player.local) {
+            return &player;
+        }
+    }
+    return nullptr;
+}
+
+const char* locationName(PlayerLocation location) {
+    switch (location) {
+    case PlayerLocation::Facility:
+        return "facility";
+    case PlayerLocation::Outside:
+        return "outside";
+    }
+    return "";
+}
+
+std::array<float, 4>& espColor(EspConfig& esp, int category) {
+    switch (category) {
+    case 1:
+        return esp.colorItems;
+    case 2:
+        return esp.colorMonsters;
+    case 3:
+        return esp.colorExits;
+    case 4:
+        return esp.colorFireExits;
+    case 5:
+        return esp.colorShips;
+    default:
+        return esp.colorPlayers;
+    }
+}
 }
 
 MenuConfiguration menuConfiguration(const Config& config) noexcept {
@@ -296,6 +703,10 @@ MenuRectangle Interface::menuRectangle() const {
     return {mMenuLeft, mMenuTop, mMenuWidth, mMenuHeight};
 }
 
+std::optional<MenuPreview> Interface::preview() const {
+    return mPreview;
+}
+
 bool Interface::consumeConfigChange() {
     const bool changed = mConfigurationChanged;
     mConfigurationChanged = false;
@@ -316,783 +727,1273 @@ void Interface::requestConfigSave() {
     mConfigurationSaveRequested = true;
 }
 
+void Interface::configSwitch(const char* label, const char* hint, bool& value) {
+    if (switchRow(label, value)) {
+        value = !value;
+        markConfigChanged();
+    }
+    noteHint(mHint, hint);
+}
+
+void Interface::sessionSwitch(const char* label, const char* hint, bool on, PlayerAction action) {
+    if (switchRow(label, on)) {
+        queueAction({action, NoPlayerActionPayload{}});
+    }
+    noteHint(mHint, hint);
+}
+
+void Interface::command(const char* label, const char* hint, PlayerActionRequest request) {
+    if (commandRow(label, CommandTone::Neutral)) {
+        queueAction(request);
+    }
+    noteHint(mHint, hint);
+}
+
+void Interface::dangerCommand(const char* label, const char* hint, PlayerActionRequest request) {
+    if (commandRow(label, CommandTone::Danger)) {
+        queueAction(request);
+    }
+    noteHint(mHint, hint);
+}
+
 void Interface::render(const MenuSnapshot& snapshot, const RuntimeCatalogs& catalogs,
                        const MenuFrame& frame, std::string_view runtimeStatus,
                        MenuConfiguration& configuration) {
-    if (mVisibility == MenuVisibility::Hidden)
+    mPreview.reset();
+    if (mVisibility == MenuVisibility::Hidden) {
         return;
+    }
+    mHint = nullptr;
 
-    ImFont* const bodyFont = fontBody();
-    if (bodyFont)
+    ImFont* const bodyFont = fonts().body;
+    if (bodyFont) {
         ImGui::PushFont(bodyFont);
+    }
 
+    const float screenWidth = static_cast<float>(frame.width);
+    const float screenHeight = static_cast<float>(frame.height);
     if (!mMenuPositionInitialized || frame.width != mLastWindowWidth ||
         frame.height != mLastWindowHeight) {
-        mMenuLeft = std::max(40.f, (static_cast<float>(frame.width) - kMenuWidth) * 0.5f);
-        mMenuTop = std::max(40.f, (static_cast<float>(frame.height) - kMenuHeight) * 0.5f);
+        mMenuLeft = std::max(40.f, (screenWidth - kMenuWidth) * 0.5f);
+        mMenuTop = std::max(40.f, (screenHeight - kMenuHeight) * 0.5f);
         mMenuPositionInitialized = true;
         mLastWindowWidth = frame.width;
         mLastWindowHeight = frame.height;
     }
-
-    mMenuLeft =
-        std::clamp(mMenuLeft, 0.f, std::max(0.f, static_cast<float>(frame.width) - kMenuWidth));
-    mMenuTop =
-        std::clamp(mMenuTop, 0.f, std::max(0.f, static_cast<float>(frame.height) - kMenuHeight));
+    mMenuLeft = std::clamp(mMenuLeft, 0.f, std::max(0.f, screenWidth - kMenuWidth));
+    mMenuTop = std::clamp(mMenuTop, 0.f, std::max(0.f, screenHeight - kMenuHeight));
 
     ImGui::SetNextWindowPos(ImVec2(mMenuLeft, mMenuTop), ImGuiCond_Always);
     ImGui::SetNextWindowSize(ImVec2(kMenuWidth, kMenuHeight), ImGuiCond_Always);
-
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(12.f, 10.f));
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 8.f);
-    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.035f, 0.035f, 0.038f, 0.97f));
     const bool windowVisible = ImGui::Begin(
         "##kue_menu", nullptr,
         ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoTitleBar |
-            ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove);
-
-    {
-        const ImVec2 windowPosition = ImGui::GetWindowPos();
-        const ImVec2 windowSize = ImGui::GetWindowSize();
-        mMenuLeft = windowPosition.x;
-        mMenuTop = windowPosition.y;
-        mMenuWidth = windowSize.x;
-        mMenuHeight = windowSize.y;
-        if (windowVisible) {
-            ImDrawList* drawList = ImGui::GetWindowDrawList();
-            drawList->AddRect(
-                windowPosition,
-                ImVec2(windowPosition.x + windowSize.x, windowPosition.y + windowSize.y),
-                rgba({.red = 50u, .green = 50u, .blue = 56u, .alpha = 255u}), 8.f, 0, 1.5f);
-        }
-    }
-
+            ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
+            ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+    const ImVec2 windowPosition = ImGui::GetWindowPos();
+    const ImVec2 windowSize = ImGui::GetWindowSize();
+    mMenuLeft = windowPosition.x;
+    mMenuTop = windowPosition.y;
+    mMenuWidth = windowSize.x;
+    mMenuHeight = windowSize.y;
     if (!windowVisible) {
         ImGui::End();
-        ImGui::PopStyleColor();
-        ImGui::PopStyleVar(2);
-        if (bodyFont)
+        if (bodyFont) {
             ImGui::PopFont();
+        }
         return;
     }
 
-    const ImVec2 headerPos = ImGui::GetCursorScreenPos();
-    ImFont* const titleFont = fontTitle();
-    if (titleFont)
-        ImGui::PushFont(titleFont);
-    ImGui::TextColored(ImVec4(0.91f, 0.91f, 0.93f, 1.f), "Kue");
-    if (titleFont)
-        ImGui::PopFont();
-    ImGui::SameLine();
-    ImGui::SetCursorPosY(ImGui::GetCursorPosY() + 8.f);
-    ImGui::TextColored(ImVec4(0.48f, 0.48f, 0.52f, 1.f), "Lethal Menu");
-    ImGui::SameLine(ImGui::GetWindowWidth() - 120.f);
-    ImGui::TextColored(ImVec4(0.48f, 0.48f, 0.52f, 1.f), "%.0f fps",
-                       static_cast<double>(frame.framesPerSecond));
-    ImGui::SetCursorScreenPos(headerPos);
-    ImGui::InvisibleButton("##drag_handle", ImVec2(ImGui::GetWindowWidth() - 24.f, 32.f));
+    ImDrawList* const drawList = ImGui::GetWindowDrawList();
+    const ImVec2 windowMaximum(windowPosition.x + windowSize.x, windowPosition.y + windowSize.y);
+    drawList->AddRectFilled(
+        windowPosition, ImVec2(windowPosition.x + kSidebarWidth, windowMaximum.y - kFooterHeight),
+        color(palette::kSidebar), 6.f, ImDrawFlags_RoundCornersTopLeft);
+    drawList->AddLine(ImVec2(windowPosition.x + kSidebarWidth, windowPosition.y),
+                      ImVec2(windowPosition.x + kSidebarWidth, windowMaximum.y - kFooterHeight),
+                      color(palette::kBorder));
+    drawList->AddLine(ImVec2(windowPosition.x, windowMaximum.y - kFooterHeight),
+                      ImVec2(windowMaximum.x, windowMaximum.y - kFooterHeight),
+                      color(palette::kBorder));
+    drawList->AddRect(windowPosition, windowMaximum, color(palette::kBorder), 6.f, 0, 1.f);
+
+    ImGui::SetCursorPos(ImVec2(0.f, 0.f));
+    ImGui::InvisibleButton("##drag_handle", ImVec2(windowSize.x, kHeaderHeight));
     if (ImGui::IsItemActive() && ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
         const ImVec2 mouseDelta = ImGui::GetIO().MouseDelta;
-        mMenuLeft += mouseDelta.x;
-        mMenuTop += mouseDelta.y;
         mMenuLeft =
-            std::clamp(mMenuLeft, 0.f, std::max(0.f, static_cast<float>(frame.width) - mMenuWidth));
-        mMenuTop = std::clamp(mMenuTop, 0.f,
-                              std::max(0.f, static_cast<float>(frame.height) - mMenuHeight));
+            std::clamp(mMenuLeft + mouseDelta.x, 0.f, std::max(0.f, screenWidth - mMenuWidth));
+        mMenuTop =
+            std::clamp(mMenuTop + mouseDelta.y, 0.f, std::max(0.f, screenHeight - mMenuHeight));
         ImGui::SetWindowPos(ImVec2(mMenuLeft, mMenuTop));
     }
-    ImGui::SetCursorScreenPos(ImVec2(headerPos.x, headerPos.y + 32.f));
 
-    ImGui::Spacing();
-    drawTabs();
-    ImGui::Separator();
-    ImGui::Spacing();
+    drawSidebar();
+    drawHeader(snapshot, frame);
 
-    const float footerHeight = 26.f;
-    const float bodyHeight = ImGui::GetContentRegionAvail().y - footerHeight;
-    const bool tabBodyVisible = ImGui::BeginChild(
-        "##tab_body", ImVec2(0.f, std::max(80.f, bodyHeight)), ImGuiChildFlags_None);
-    if (tabBodyVisible) {
-        switch (mActiveTab) {
-        case MenuTab::Self:
-            drawSelfTab(snapshot, configuration);
+    ImGui::SetCursorPos(ImVec2(kSidebarWidth + kPagePadding, kHeaderHeight));
+    const ImVec2 pageSize(windowSize.x - kSidebarWidth - kPagePadding * 2.f,
+                          windowSize.y - kHeaderHeight - kFooterHeight - kPagePadding * 0.5f);
+    if (ImGui::BeginChild("##page", pageSize, ImGuiChildFlags_None)) {
+        switch (mPage) {
+        case MenuPage::Self:
+            drawSelfPage(snapshot, configuration);
             break;
-        case MenuTab::Visuals:
-            drawVisualsTab(configuration);
+        case MenuPage::Visuals:
+            drawVisualsPage(configuration);
             break;
-        case MenuTab::Players:
-            drawPlayersTab(snapshot);
+        case MenuPage::Players:
+            drawPlayersPage(snapshot);
             break;
-        case MenuTab::Enemies:
-            drawEnemiesTab(snapshot, catalogs);
+        case MenuPage::Enemies:
+            drawEnemiesPage(snapshot, catalogs);
             break;
-        case MenuTab::Items:
-            drawItemsTab(snapshot, catalogs);
+        case MenuPage::Items:
+            drawItemsPage(snapshot, catalogs);
             break;
-        case MenuTab::Moons:
-            drawMoonsTab(snapshot, catalogs);
+        case MenuPage::Moons:
+            drawMoonsPage(snapshot, catalogs);
             break;
-        case MenuTab::Trolls:
-            drawTrollsTab(snapshot);
+        case MenuPage::World:
+            drawWorldPage(snapshot);
             break;
-        case MenuTab::Settings:
-            drawSettingsTab(configuration);
+        case MenuPage::Settings:
+            drawSettingsPage(configuration, frame);
             break;
         }
     }
     ImGui::EndChild();
 
-    ImGui::Separator();
-    const std::size_t maximumStatusLength =
-        static_cast<std::size_t>(std::numeric_limits<int>::max());
-    const int statusLength = static_cast<int>(std::min(runtimeStatus.size(), maximumStatusLength));
-    const char* statusData = runtimeStatus.empty() ? "" : runtimeStatus.data();
-    ImGui::TextColored(ImVec4(0.40f, 0.40f, 0.44f, 1.f), "%.*s  |  %s toggle  Esc close",
-                       statusLength, statusData, menuKeyName(configuration.menuKey));
+    drawFooter(runtimeStatus, configuration);
 
     ImGui::End();
-    ImGui::PopStyleColor();
-    ImGui::PopStyleVar(2);
-    if (bodyFont)
+    if (bodyFont) {
         ImGui::PopFont();
-}
-
-void Interface::drawTabs() {
-    drawTabButton("Self", MenuTab::Self);
-    ImGui::SameLine();
-    drawTabButton("Visuals", MenuTab::Visuals);
-    ImGui::SameLine();
-    drawTabButton("Players", MenuTab::Players);
-    ImGui::SameLine();
-    drawTabButton("Enemies", MenuTab::Enemies);
-    ImGui::SameLine();
-    drawTabButton("Items", MenuTab::Items);
-    ImGui::SameLine();
-    drawTabButton("Moons", MenuTab::Moons);
-    ImGui::SameLine();
-    drawTabButton("Trolls", MenuTab::Trolls);
-    ImGui::SameLine();
-    drawTabButton("Settings", MenuTab::Settings);
-}
-
-void Interface::drawTabButton(const char* label, MenuTab tab) {
-    const bool selected = mActiveTab == tab;
-    ImGui::PushStyleColor(ImGuiCol_Button, selected ? ImVec4(0.80f, 0.18f, 0.22f, 1.f)
-                                                    : ImVec4(0.10f, 0.10f, 0.12f, 1.f));
-    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, selected ? ImVec4(0.90f, 0.26f, 0.30f, 1.f)
-                                                           : ImVec4(0.16f, 0.16f, 0.18f, 1.f));
-    if (ImGui::Button(label, ImVec2(0.f, 28.f)))
-        mActiveTab = tab;
-    ImGui::PopStyleColor(2);
-}
-
-void Interface::drawSelfTab(const MenuSnapshot& snapshot, MenuConfiguration& configuration) {
-    sectionLabel("SELF CHEATS");
-    if (toggleRow("Infinite Stamina", configuration.infiniteStamina))
-        markConfigChanged();
-    if (toggleRow("No Weight", configuration.noWeight))
-        markConfigChanged();
-    if (toggleRow("Infinite Flashlight / Battery", configuration.infiniteBattery))
-        markConfigChanged();
-    if (toggleRow("Infinite / Expanding Inventory", configuration.extendedInventory))
-        markConfigChanged();
-
-    sectionLabel("LIVE");
-    ImGui::Text("Stamina  %.0f%%", static_cast<double>(snapshot.playerFrame.sprintMeter * 100.f));
-    ImGui::ProgressBar(std::clamp(snapshot.playerFrame.sprintMeter, 0.f, 1.f), ImVec2(-1.f, 6.f),
-                       "");
-    const float extraWeight = std::max(0.f, snapshot.playerFrame.carryWeight - 1.f);
-    ImGui::Text("Extra weight  %.2f", static_cast<double>(extraWeight));
-    ImGui::ProgressBar(std::clamp(extraWeight / 2.f, 0.f, 1.f), ImVec2(-1.f, 6.f), "");
-
-    sectionLabel("ACTIONS");
-    if (actionButton(snapshot.flyEnabled ? "Disable Fly" : "Enable Fly", -1.f))
-        queueAction({PlayerAction::ToggleFly, NoPlayerActionPayload{}});
-    if (actionButton("Toggle Third Person", -1.f))
-        queueAction({PlayerAction::ToggleThirdPerson, NoPlayerActionPayload{}});
-    if (actionButton("Kill Yourself", -1.f)) {
-        std::optional<std::uint64_t> selfClientId;
-        for (const PlayerSnapshotPlayer& player : snapshot.playerFrame.players) {
-            if (player.local) {
-                selfClientId = player.clientId;
-                break;
-            }
-        }
-        if (selfClientId) {
-            queueAction({PlayerAction::Kill, PlayerTargetPayload{*selfClientId}});
-        } else {
-            KUE_ERR("menu cannot queue self-kill because no local player is available");
-        }
     }
 }
 
-void Interface::drawEnemiesTab(const MenuSnapshot& snapshot, const RuntimeCatalogs& catalogs) {
-    const float listWidth = 280.f;
-    const std::size_t enemyCount = catalogs.enemyCount();
-    if (mSelectedEnemyType >= enemyCount)
-        mSelectedEnemyType = enemyCount == 0 ? 0 : enemyCount - 1;
-    bool anyActive = false;
-    for (std::size_t index = 0; index < enemyCount; ++index) {
-        const EnemyCatalogLookup entry = catalogs.enemyAt(index);
-        anyActive = anyActive ||
-                    (entry.result == CatalogLookupResult::Found && entry.entry.activeCount > 0);
-    }
-    const EnemyCatalogLookup selectedEnemy = catalogs.enemyAt(mSelectedEnemyType);
-    bool selectedAvailable =
-        selectedEnemy.result == CatalogLookupResult::Found && selectedEnemy.entry.activeCount > 0;
-    if (!snapshot.localIsHost && anyActive && !selectedAvailable) {
-        for (std::size_t index = 0; index < enemyCount; ++index) {
-            const EnemyCatalogLookup entry = catalogs.enemyAt(index);
-            if (entry.result == CatalogLookupResult::Found && entry.entry.activeCount > 0) {
-                mSelectedEnemyType = index;
-                selectedAvailable = true;
-                break;
-            }
-        }
-    }
-
-    const bool enemyTypesVisible =
-        ImGui::BeginChild("##enemy_types", ImVec2(listWidth, 0.f), ImGuiChildFlags_Borders);
-    if (enemyTypesVisible) {
-        ImGui::TextColored(ImVec4(0.35f, 0.85f, 0.45f, 1.f), "Available Now");
-        ImGui::Separator();
-        std::array<char, kRuntimeCatalogNameCapacity + 32> activeLabel{};
-        std::array<char, kRuntimeCatalogNameCapacity + 1> catalogLabel{};
-        for (std::size_t index = 0; index < enemyCount; ++index) {
-            const EnemyCatalogLookup entry = catalogs.enemyAt(index);
-            if (entry.result != CatalogLookupResult::Found || entry.entry.activeCount == 0)
-                continue;
-            std::snprintf(activeLabel.data(), activeLabel.size(), "%.*s  (x%u)",
-                          static_cast<int>(entry.entry.name.size()), entry.entry.name.data(),
-                          entry.entry.activeCount);
-            ImGui::PushID(static_cast<int>(index) + 10000);
-            if (ImGui::Selectable(activeLabel.data(), mSelectedEnemyType == index))
-                mSelectedEnemyType = index;
-            ImGui::PopID();
-        }
-        if (!anyActive)
-            ImGui::TextColored(ImVec4(0.48f, 0.48f, 0.52f, 1.f),
-                               "No living enemies currently loaded");
-        if (snapshot.localIsHost) {
-            ImGui::Spacing();
-            ImGui::TextColored(ImVec4(0.80f, 0.18f, 0.22f, 1.f), "Host Spawn Catalog");
-            ImGui::Separator();
-            if (enemyCount == 0)
-                ImGui::TextWrapped("Enemy assets are discovered after reaching a lobby or moon.");
-            for (std::size_t index = 0; index < enemyCount; ++index) {
-                const EnemyCatalogLookup entry = catalogs.enemyAt(index);
-                if (entry.result != CatalogLookupResult::Found)
-                    continue;
-                std::snprintf(catalogLabel.data(), catalogLabel.size(), "%.*s",
-                              static_cast<int>(entry.entry.name.size()), entry.entry.name.data());
-                ImGui::PushID(static_cast<int>(index));
-                if (ImGui::Selectable(catalogLabel.data(), mSelectedEnemyType == index))
-                    mSelectedEnemyType = index;
-                ImGui::PopID();
-            }
-        }
-    }
-    ImGui::EndChild();
-
-    ImGui::SameLine();
-    const bool enemyActionsVisible =
-        ImGui::BeginChild("##enemy_actions", ImVec2(0.f, 0.f), ImGuiChildFlags_Borders);
-    if (!enemyActionsVisible) {
-        ImGui::EndChild();
-        return;
-    }
-    sectionLabel(snapshot.localIsHost ? "SESSION: HOST" : "SESSION: CLIENT");
-    const EnemyCatalogLookup chosenEnemy = catalogs.enemyAt(mSelectedEnemyType);
-    if (chosenEnemy.result == CatalogLookupResult::Found) {
-        ImGui::TextWrapped("%.*s", static_cast<int>(chosenEnemy.entry.name.size()),
-                           chosenEnemy.entry.name.data());
-        ImGui::SetNextItemWidth(-1.f);
-        boundedSlider("##spawn_count", mEnemySpawnCount, {.minimum = 1, .maximum = 20}, "Count %d");
-        if (mSelectedSpawnPlayer >= snapshot.playerFrame.players.size())
-            mSelectedSpawnPlayer =
-                snapshot.playerFrame.players.empty() ? 0 : snapshot.playerFrame.players.size() - 1;
-        if (!snapshot.playerFrame.players.empty()) {
-            const PlayerSnapshotPlayer& selected =
-                snapshot.playerFrame.players[mSelectedSpawnPlayer];
-            const char* preview = selected.local ? "You" : selected.name.c_str();
-            ImGui::SetNextItemWidth(-1.f);
-            if (ImGui::BeginCombo("##spawn_target", preview)) {
-                for (std::size_t index = 0; index < snapshot.playerFrame.players.size(); ++index) {
-                    const PlayerSnapshotPlayer& player = snapshot.playerFrame.players[index];
-                    const bool chosen = index == mSelectedSpawnPlayer;
-                    const char* name = player.local ? "You" : player.name.c_str();
-                    ImGui::PushID(static_cast<int>(index));
-                    if (ImGui::Selectable(name, chosen))
-                        mSelectedSpawnPlayer = index;
-                    if (chosen)
-                        ImGui::SetItemDefaultFocus();
-                    ImGui::PopID();
-                }
-                ImGui::EndCombo();
-            }
-            sectionLabel("WORKS AS CLIENT - EXISTING ENEMIES");
-            ImGui::BeginDisabled(!selectedAvailable);
-            if (actionButton("Summon Existing Type To Player", -1.f)) {
-                queueAction({PlayerAction::SummonEnemyTypeAtPlayer,
-                             EnemyAtPlayerPayload{
-                                 chosenEnemy.entry.id, static_cast<std::uint8_t>(mEnemySpawnCount),
-                                 mSpawnOutside ? EnemySpawnArea::Outside : EnemySpawnArea::Inside,
-                                 selected.clientId}});
-            }
-            ImGui::EndDisabled();
-            if (ImGui::IsItemHovered())
-                ImGui::SetTooltip("Moves only living enemies shown under Available Now.");
-            if (!selectedAvailable)
-                ImGui::TextColored(ImVec4(0.65f, 0.65f, 0.68f, 1.f),
-                                   "No selected living enemy is available to summon");
-
-            sectionLabel("HOST ONLY - CREATE NEW ENEMIES");
-            if (!snapshot.localIsHost)
-                ImGui::TextColored(ImVec4(0.85f, 0.30f, 0.30f, 1.f),
-                                   "Disabled: the remote host owns enemy creation");
-            ImGui::BeginDisabled(!snapshot.localIsHost);
-            ImGui::Checkbox("Spawn outside", &mSpawnOutside);
-            if (actionButton("Spawn Selected Enemy", -1.f)) {
-                queueAction({PlayerAction::SpawnEnemy,
-                             EnemySpawnPayload{chosenEnemy.entry.id,
-                                               static_cast<std::uint8_t>(mEnemySpawnCount),
-                                               mSpawnOutside ? EnemySpawnArea::Outside
-                                                             : EnemySpawnArea::Inside}});
-            }
-            if (actionButton("Spawn At Selected Player", -1.f)) {
-                queueAction({PlayerAction::SpawnEnemyAtPlayer,
-                             EnemyAtPlayerPayload{
-                                 chosenEnemy.entry.id, static_cast<std::uint8_t>(mEnemySpawnCount),
-                                 mSpawnOutside ? EnemySpawnArea::Outside : EnemySpawnArea::Inside,
-                                 selected.clientId}});
-            }
-            ImGui::EndDisabled();
-        }
-    } else {
-        ImGui::TextColored(ImVec4(0.48f, 0.48f, 0.52f, 1.f), "No catalog yet");
-    }
-    sectionLabel("CLIENT/HOST - ALL ACTIVE ENEMIES");
-    if (actionButton("Kill All Enemies", -1.f))
-        queueAction({PlayerAction::KillAllEnemies, NoPlayerActionPayload{}});
-    if (actionButton("Stun All Enemies", -1.f))
-        queueAction({PlayerAction::StunAllEnemies, NoPlayerActionPayload{}});
-    ImGui::EndChild();
-}
-
-void Interface::drawItemsTab(const MenuSnapshot& snapshot, const RuntimeCatalogs& catalogs) {
-    const float listWidth = 280.f;
-    const std::size_t itemCount = catalogs.itemCount();
-    if (mSelectedItemType >= itemCount)
-        mSelectedItemType = itemCount == 0 ? 0 : itemCount - 1;
-    const bool itemTypesVisible =
-        ImGui::BeginChild("##item_types", ImVec2(listWidth, 0.f), ImGuiChildFlags_Borders);
-    if (itemTypesVisible) {
-        ImGui::TextColored(ImVec4(0.80f, 0.18f, 0.22f, 1.f), "Installed Item Types");
-        ImGui::Separator();
-        if (itemCount == 0)
-            ImGui::TextWrapped("Waiting for the installed item catalog...");
-        std::array<char, kRuntimeCatalogNameCapacity + 1> catalogLabel{};
-        for (std::size_t index = 0; index < itemCount; ++index) {
-            const ItemCatalogLookup entry = catalogs.itemAt(index);
-            if (entry.result != CatalogLookupResult::Found)
-                continue;
-            std::snprintf(catalogLabel.data(), catalogLabel.size(), "%.*s",
-                          static_cast<int>(entry.entry.name.size()), entry.entry.name.data());
-            ImGui::PushID(static_cast<int>(index));
-            if (ImGui::Selectable(catalogLabel.data(), mSelectedItemType == index))
-                mSelectedItemType = index;
-            ImGui::PopID();
-        }
-    }
-    ImGui::EndChild();
-    ImGui::SameLine();
-    const bool itemActionsVisible =
-        ImGui::BeginChild("##item_actions", ImVec2(0.f, 0.f), ImGuiChildFlags_Borders);
-    if (!itemActionsVisible) {
-        ImGui::EndChild();
-        return;
-    }
-    sectionLabel("TARGET PLAYER");
-    if (mSelectedItemPlayer >= snapshot.playerFrame.players.size())
-        mSelectedItemPlayer =
-            snapshot.playerFrame.players.empty() ? 0 : snapshot.playerFrame.players.size() - 1;
-    if (!snapshot.playerFrame.players.empty()) {
-        const PlayerSnapshotPlayer& selected = snapshot.playerFrame.players[mSelectedItemPlayer];
-        const char* preview = selected.local ? "You" : selected.name.c_str();
-        ImGui::SetNextItemWidth(-1.f);
-        if (ImGui::BeginCombo("##item_target", preview)) {
-            for (std::size_t index = 0; index < snapshot.playerFrame.players.size(); ++index) {
-                const PlayerSnapshotPlayer& player = snapshot.playerFrame.players[index];
-                const bool chosen = index == mSelectedItemPlayer;
-                const char* name = player.local ? "You" : player.name.c_str();
-                ImGui::PushID(static_cast<int>(index));
-                if (ImGui::Selectable(name, chosen))
-                    mSelectedItemPlayer = index;
-                if (chosen)
-                    ImGui::SetItemDefaultFocus();
-                ImGui::PopID();
-            }
-            ImGui::EndCombo();
-        }
-        sectionLabel("HOST ONLY - SPAWN NEW ITEM");
-        if (!snapshot.localIsHost)
-            ImGui::TextColored(ImVec4(0.85f, 0.30f, 0.30f, 1.f),
-                               "Disabled: the remote host owns item creation");
-        ImGui::BeginDisabled(!snapshot.localIsHost);
-        ImGui::SetNextItemWidth(-1.f);
-        boundedSlider("##item_count", mItemSpawnCount, {.minimum = 1, .maximum = 20}, "Count %d");
-        const ItemCatalogLookup chosenItem = catalogs.itemAt(mSelectedItemType);
-        if (chosenItem.result == CatalogLookupResult::Found &&
-            actionButton("Spawn Selected Item At Player", -1.f)) {
-            queueAction({PlayerAction::SpawnItemAtPlayer,
-                         ItemAtPlayerPayload{chosenItem.entry.id,
-                                             static_cast<std::uint8_t>(mItemSpawnCount),
-                                             selected.clientId}});
-        }
-        ImGui::EndDisabled();
-        sectionLabel("CLIENT/HOST - EXISTING LOADED ITEMS");
-        if (actionButton("Teleport All Existing Items To Player", -1.f)) {
-            queueAction(
-                {PlayerAction::TeleportItemsToPlayer, PlayerTargetPayload{selected.clientId}});
-        }
-        sectionLabel("COMPANY");
-        if (actionButton("Deposit All Ship Scrap On The Company Desk", -1.f))
-            queueAction({PlayerAction::DepositShipScrap, NoPlayerActionPayload{}});
-        sectionLabel("HOST ONLY - TERMINAL CREDITS");
-        ImGui::BeginDisabled(!snapshot.localIsHost);
-        ImGui::SetNextItemWidth(-1.f);
-        boundedSlider("##credit_amount", mCreditAmount,
-                      {.minimum = 1, .maximum = kMaximumTerminalCreditsPerAction}, "Credits %d");
-        if (actionButton("Add Credits To Terminal", -1.f))
-            queueAction({PlayerAction::AddTerminalCredits, TerminalCreditsPayload{mCreditAmount}});
-        ImGui::EndDisabled();
-    } else {
-        ImGui::TextColored(ImVec4(0.48f, 0.48f, 0.52f, 1.f), "No real player available");
-    }
-    ImGui::EndChild();
-}
-
-void Interface::drawMoonsTab(const MenuSnapshot& snapshot, const RuntimeCatalogs& catalogs) {
-    static_cast<void>(snapshot);
-    const float listWidth = 280.f;
-    const std::size_t moonCount = catalogs.moonCount();
-    if (mSelectedMoon >= moonCount)
-        mSelectedMoon = moonCount == 0 ? 0 : moonCount - 1;
-    const bool moonsVisible =
-        ImGui::BeginChild("##moon_types", ImVec2(listWidth, 0.f), ImGuiChildFlags_Borders);
-    if (moonsVisible) {
-        ImGui::TextColored(ImVec4(0.80f, 0.18f, 0.22f, 1.f), "Installed Moons");
-        ImGui::Separator();
-        if (moonCount == 0)
-            ImGui::TextWrapped("Waiting for the installed moon catalog...");
-        std::array<char, kRuntimeCatalogNameCapacity + 1> catalogLabel{};
-        for (std::size_t index = 0; index < moonCount; ++index) {
-            const MoonCatalogLookup entry = catalogs.moonAt(index);
-            if (entry.result != CatalogLookupResult::Found)
-                continue;
-            std::snprintf(catalogLabel.data(), catalogLabel.size(), "%.*s",
-                          static_cast<int>(entry.entry.name.size()), entry.entry.name.data());
-            ImGui::PushID(static_cast<int>(index));
-            if (ImGui::Selectable(catalogLabel.data(), mSelectedMoon == index))
-                mSelectedMoon = index;
-            ImGui::PopID();
-        }
-    }
-    ImGui::EndChild();
-    ImGui::SameLine();
-    const bool moonActionsVisible =
-        ImGui::BeginChild("##moon_actions", ImVec2(0.f, 0.f), ImGuiChildFlags_Borders);
-    if (!moonActionsVisible) {
-        ImGui::EndChild();
-        return;
-    }
-    sectionLabel("ROUTE THE SHIP");
-    const MoonCatalogLookup chosenMoon = catalogs.moonAt(mSelectedMoon);
-    if (chosenMoon.result == CatalogLookupResult::Found) {
-        ImGui::TextWrapped("%.*s", static_cast<int>(chosenMoon.entry.name.size()),
-                           chosenMoon.entry.name.data());
-        if (actionButton("Route Ship To Selected Moon", -1.f))
-            queueAction({PlayerAction::TravelToMoon, MoonTravelPayload{chosenMoon.entry.id}});
-        ImGui::TextWrapped("Free of charge. The ship must be in orbit and not already "
-                           "travelling. Every moon the game knows is listed, including ones "
-                           "the terminal hides. A moon marked (no map) has no terrain in the "
-                           "game files and lands on Artifice's map with its own settings. A "
-                           "moon marked (unlisted) only works as host with nobody else "
-                           "connected.");
-    } else {
-        ImGui::TextColored(ImVec4(0.48f, 0.48f, 0.52f, 1.f), "No catalog yet");
-    }
-    ImGui::EndChild();
-}
-
-void Interface::drawTrollsTab(const MenuSnapshot& snapshot) {
-    const bool trollActionsVisible =
-        ImGui::BeginChild("##troll_scroll", ImVec2(0.f, 0.f), ImGuiChildFlags_None);
-    if (!trollActionsVisible) {
-        ImGui::EndChild();
-        return;
-    }
-    sectionLabel("VERIFIED CLIENT-CAPABLE");
-    const float buttonGap = ImGui::GetStyle().ItemSpacing.x;
-    const float buttonWidth = (ImGui::GetContentRegionAvail().x - buttonGap) * 0.5f;
-    for (std::size_t index = 0; index < kClientTrollActions.size(); ++index) {
-        ImGui::PushID(static_cast<int>(index));
-        if (actionButton(kClientTrollActions[index].label, buttonWidth)) {
-            queueAction({kClientTrollActions[index].action, NoPlayerActionPayload{}});
-        }
-        ImGui::PopID();
-        if ((index & 1U) == 0U && index + 1 < kClientTrollActions.size())
-            ImGui::SameLine();
-    }
-    sectionLabel("HOST ONLY");
-    if (!snapshot.localIsHost)
-        ImGui::TextColored(ImVec4(0.85f, 0.30f, 0.30f, 1.f),
-                           "Unavailable while connected as a client");
-    ImGui::BeginDisabled(!snapshot.localIsHost);
-    for (std::size_t index = 0; index < kHostTrollActions.size(); ++index) {
-        ImGui::PushID(static_cast<int>(index) + 1000);
-        if (actionButton(kHostTrollActions[index].label, buttonWidth)) {
-            queueAction({kHostTrollActions[index].action, NoPlayerActionPayload{}});
-        }
-        ImGui::PopID();
-        if ((index & 1U) == 0U && index + 1 < kHostTrollActions.size())
-            ImGui::SameLine();
-    }
-    ImGui::EndDisabled();
-    sectionLabel("SHIP PLUSHIE ANIMATION SPAM");
-    ImGui::TextColored(ImVec4(0.48f, 0.48f, 0.52f, 1.f),
-                       "PJ Man is the animated plushie decoration in the ship.");
-    ImGui::SetNextItemWidth(-1.f);
-    boundedSlider("##pj_speed", mPjSpamSpeed, {.minimum = 0.f, .maximum = 1.f}, "Interval %.2f s");
-    if (actionButton("Toggle Ship Plushie Animation Spam", -1.f)) {
-        queueAction({PlayerAction::TogglePjManSpam,
-                     PlushieIntervalPayload{
-                         std::chrono::milliseconds{static_cast<int>(mPjSpamSpeed * 1000.f)}}});
-    }
-    ImGui::EndChild();
-}
-
-void Interface::drawVisualsTab(MenuConfiguration& configuration) {
-    sectionLabel("ESP");
-    if (toggleRow("Player ESP", configuration.esp.players))
-        markConfigChanged();
-    if (toggleRow("Item ESP", configuration.esp.items))
-        markConfigChanged();
-    if (toggleRow("Monster ESP", configuration.esp.monsters))
-        markConfigChanged();
-    if (toggleRow("Entrance ESP", configuration.esp.exits))
-        markConfigChanged();
-    if (toggleRow("Fire Exit ESP", configuration.esp.fireExits))
-        markConfigChanged();
-    if (toggleRow("Ship ESP", configuration.esp.ships))
-        markConfigChanged();
-
-    sectionLabel("RENDER OPTIONS");
-    const bool anyEspCategoryEnabled = configuration.esp.players || configuration.esp.items ||
-                                       configuration.esp.monsters || configuration.esp.exits ||
-                                       configuration.esp.fireExits || configuration.esp.ships;
-    ImGui::BeginDisabled(!anyEspCategoryEnabled);
-    if (ImGui::Checkbox("Outlines", &configuration.esp.outlines))
-        markConfigChanged();
-    if (ImGui::Checkbox("Names", &configuration.esp.names))
-        markConfigChanged();
-    if (ImGui::Checkbox("Values", &configuration.esp.values))
-        markConfigChanged();
-    if (ImGui::Checkbox("Distance", &configuration.esp.distance))
-        markConfigChanged();
-    if (ImGui::Checkbox("Lines", &configuration.esp.lines))
-        markConfigChanged();
-    if (ImGui::Checkbox("Use Scrap Tiers", &configuration.esp.useScrapTiers))
-        markConfigChanged();
-    if (ImGui::Checkbox("Death Notifications", &configuration.esp.deathNotifications))
-        markConfigChanged();
-    ImGui::SetNextItemWidth(-1.f);
-    if (boundedSlider("##maxd", configuration.esp.maxDistance, {.minimum = 10.f, .maximum = 1000.f},
-                      "Max %.0f m")) {
-        markConfigChanged();
-    }
-    ImGui::EndDisabled();
-
-    sectionLabel("COLORS");
-    if (ImGui::ColorEdit4("Players", configuration.esp.colorPlayers.data(),
-                          ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_AlphaBar)) {
-        markConfigChanged();
-    }
-    if (ImGui::ColorEdit4("Items", configuration.esp.colorItems.data(),
-                          ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_AlphaBar)) {
-        markConfigChanged();
-    }
-    if (ImGui::ColorEdit4("Monsters", configuration.esp.colorMonsters.data(),
-                          ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_AlphaBar)) {
-        markConfigChanged();
-    }
-    if (ImGui::ColorEdit4("Entrances", configuration.esp.colorExits.data(),
-                          ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_AlphaBar)) {
-        markConfigChanged();
-    }
-    if (ImGui::ColorEdit4("Fire Exits", configuration.esp.colorFireExits.data(),
-                          ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_AlphaBar)) {
-        markConfigChanged();
-    }
-    if (ImGui::ColorEdit4("Ship", configuration.esp.colorShips.data(),
-                          ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_AlphaBar)) {
-        markConfigChanged();
-    }
-}
-
-void Interface::drawPlayersTab(const MenuSnapshot& snapshot) {
-    const float listWidth = 200.f;
-    const bool playerListVisible =
-        ImGui::BeginChild("##plist", ImVec2(listWidth, -36.f), ImGuiChildFlags_Borders);
-    if (playerListVisible) {
-        ImGui::TextColored(ImVec4(0.80f, 0.18f, 0.22f, 1.f), "Player List");
-        ImGui::Separator();
-        if (snapshot.playerFrame.players.empty()) {
-            ImGui::TextColored(ImVec4(0.48f, 0.48f, 0.52f, 1.f), "No players yet");
-        }
-        for (std::size_t index = 0; index < snapshot.playerFrame.players.size(); ++index) {
-            const PlayerSnapshotPlayer& player = snapshot.playerFrame.players[index];
-            const bool selected = mSelectedPlayer == index;
-            const std::array<char, kPlayerListLabelCapacity> label = playerListLabel(player);
-            ImGui::PushStyleColor(ImGuiCol_Text,
-                                  player.dead ? ImVec4(0.55f, 0.55f, 0.58f, 1.f)
-                                              : (selected ? ImVec4(0.35f, 0.85f, 0.45f, 1.f)
-                                                          : ImVec4(0.90f, 0.90f, 0.92f, 1.f)));
-            ImGui::PushID(static_cast<int>(index));
-            if (ImGui::Selectable(label.data(), selected))
-                mSelectedPlayer = index;
-            ImGui::PopID();
-            ImGui::PopStyleColor();
-        }
-    }
-    ImGui::EndChild();
-
-    ImGui::SameLine();
-
-    const bool playerActionsVisible =
-        ImGui::BeginChild("##pactions", ImVec2(0.f, -36.f), ImGuiChildFlags_Borders);
-    if (!playerActionsVisible) {
-        ImGui::EndChild();
-        return;
-    }
-    if (mSelectedPlayer >= snapshot.playerFrame.players.size()) {
-        ImGui::TextColored(ImVec4(0.48f, 0.48f, 0.52f, 1.f), "Select a player");
-        ImGui::EndChild();
-        return;
-    }
-    const PlayerSnapshotPlayer& player = snapshot.playerFrame.players[mSelectedPlayer];
-    ImGui::TextColored(ImVec4(0.80f, 0.18f, 0.22f, 1.f), "%s", player.name.c_str());
-    ImGui::Separator();
-
-    sectionLabel("PLAYER INFORMATION");
-    ImGui::Text("SteamID:  %llu", static_cast<unsigned long long>(player.steamId));
-    ImGui::Text("PlayerID: %llu", static_cast<unsigned long long>(player.clientId));
-    ImGui::Text("Status:   %s", player.dead ? "DEAD" : "ALIVE");
-    ImGui::Text("Health:   %d", player.health);
-    ImGui::Text("Insanity: %.0f", static_cast<double>(player.insanity));
-    if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("Fear/mental-state value. High insanity gives a large bonus in the Ghost "
-                          "Girl's weighted target selection.");
-
-    sectionLabel("GENERAL ACTIONS");
-    auto drawPlayerActionRow = [&](const char* label, PlayerAction action) {
-        ImGui::TextUnformatted(label);
-        ImGui::SameLine(ImGui::GetContentRegionAvail().x - 90.f);
-        ImGui::PushID(label);
-        if (actionButton("Execute", 90.f)) {
-            queueAction({action, PlayerTargetPayload{player.clientId}});
-        }
-        ImGui::PopID();
+void Interface::drawSidebar() {
+    struct PageEntry {
+        MenuPage page;
+        Icon icon;
+        const char* label;
     };
-    drawPlayerActionRow("Teleport To Them", PlayerAction::TeleportTo);
-    drawPlayerActionRow("Kill Player", PlayerAction::Kill);
-    drawPlayerActionRow("Heal Player", PlayerAction::Heal);
-    ImGui::TextUnformatted("Clear Insanity");
-    ImGui::SameLine(ImGui::GetContentRegionAvail().x - 90.f);
-    ImGui::PushID("clear_insanity");
-    if (actionButton("Execute", 90.f)) {
-        queueAction({PlayerAction::ClearInsanity, PlayerTargetPayload{player.clientId}});
-    }
-    ImGui::PopID();
-    ImGui::TextUnformatted("Max Insanity");
-    ImGui::SameLine(ImGui::GetContentRegionAvail().x - 90.f);
-    ImGui::PushID("max_insanity");
-    if (actionButton("Execute", 90.f)) {
-        queueAction({PlayerAction::MaxInsanity, PlayerTargetPayload{player.clientId}});
-    }
-    ImGui::PopID();
-    drawPlayerActionRow("Lure All Enemies", PlayerAction::LureAllEnemies);
-    ImGui::TextUnformatted("Persistent Targeting");
-    ImGui::SameLine(ImGui::GetContentRegionAvail().x - 90.f);
-    ImGui::PushID("persistent_lure");
-    const bool persistent =
-        snapshot.persistentLureClientId && *snapshot.persistentLureClientId == player.clientId;
-    if (actionButton(persistent ? "Disable" : "Enable", 90.f)) {
-        queueAction({PlayerAction::TogglePersistentLure, PlayerTargetPayload{player.clientId}});
-    }
-    if (ImGui::IsItemHovered())
-        ImGui::SetTooltip(
-            "Continuously forces living enemies to track this player's live location while "
-            "preserving their attack AI. Special enemies still use their normal attack phases.");
-    ImGui::PopID();
-    drawPlayerActionRow("Teleport All Enemies", PlayerAction::TeleportAllEnemies);
+    constexpr std::array<PageEntry, 8> pages = {{
+        {MenuPage::Self, Icon::Self, "Self"},
+        {MenuPage::Visuals, Icon::Visuals, "Visuals"},
+        {MenuPage::Players, Icon::Players, "Players"},
+        {MenuPage::Enemies, Icon::Enemies, "Enemies"},
+        {MenuPage::Items, Icon::Items, "Items"},
+        {MenuPage::Moons, Icon::Moons, "Moons"},
+        {MenuPage::World, Icon::World, "World"},
+        {MenuPage::Settings, Icon::Settings, "Settings"},
+    }};
 
-    ImGui::Spacing();
-    if (actionButton("Kill Everyone", -1.f)) {
-        queueAction({PlayerAction::KillAll, NoPlayerActionPayload{}});
+    ImDrawList* const drawList = ImGui::GetWindowDrawList();
+    const ImVec2 origin = ImGui::GetWindowPos();
+    ImFont* const titleFont = fonts().title;
+    drawIcon(drawList, Icon::Sun, ImVec2(origin.x + 25.f, origin.y + 26.f), color(palette::kAccent),
+             1.15f);
+    if (titleFont) {
+        drawList->AddText(titleFont, titleFont->FontSize, ImVec2(origin.x + 42.f, origin.y + 15.f),
+                          color(palette::kAccent), "SOLAR");
     }
-    if (actionButton("Kill Everyone Except You", -1.f)) {
-        queueAction({PlayerAction::KillAllExceptLocal, NoPlayerActionPayload{}});
+
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0.f, 2.f));
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(42.f, 3.f));
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 0.f);
+    ImGui::SetCursorPos(ImVec2(0.f, 58.f));
+    for (const PageEntry& entry : pages) {
+        const bool selected = mPage == entry.page;
+        const ImVec4 tint = selected ? palette::kAccent : palette::kMuted;
+        ImGui::PushStyleColor(ImGuiCol_Button,
+                              selected ? palette::kControl : ImVec4(0.f, 0.f, 0.f, 0.f));
+        ImGui::PushStyleColor(ImGuiCol_Text, tint);
+        ImGui::SetCursorPosX(0.f);
+        if (ImGui::Button(entry.label, ImVec2(kSidebarWidth, 28.f))) {
+            mPage = entry.page;
+            mCapturingMenuKey = false;
+        }
+        ImGui::PopStyleColor(2);
+        const ImVec2 minimum = ImGui::GetItemRectMin();
+        const ImVec2 maximum = ImGui::GetItemRectMax();
+        drawIcon(drawList, entry.icon, ImVec2(minimum.x + 25.f, (minimum.y + maximum.y) * 0.5f),
+                 color(tint), 1.1f);
+        if (selected) {
+            drawList->AddRectFilled(minimum, ImVec2(minimum.x + 2.f, maximum.y),
+                                    color(palette::kAccent));
+        }
+    }
+    ImGui::PopStyleVar(3);
+}
+
+void Interface::drawHeader(const MenuSnapshot& snapshot, const MenuFrame& frame) {
+    const char* title = "";
+    Icon icon = Icon::Self;
+    switch (mPage) {
+    case MenuPage::Self:
+        title = "Self";
+        icon = Icon::Self;
+        break;
+    case MenuPage::Visuals:
+        title = "Visuals";
+        icon = Icon::Visuals;
+        break;
+    case MenuPage::Players:
+        title = "Players";
+        icon = Icon::Players;
+        break;
+    case MenuPage::Enemies:
+        title = "Enemies";
+        icon = Icon::Enemies;
+        break;
+    case MenuPage::Items:
+        title = "Items";
+        icon = Icon::Items;
+        break;
+    case MenuPage::Moons:
+        title = "Moons";
+        icon = Icon::Moons;
+        break;
+    case MenuPage::World:
+        title = "World";
+        icon = Icon::World;
+        break;
+    case MenuPage::Settings:
+        title = "Settings";
+        icon = Icon::Settings;
+        break;
+    }
+    ImDrawList* const drawList = ImGui::GetWindowDrawList();
+    const ImVec2 origin = ImGui::GetWindowPos();
+    const float left = origin.x + kSidebarWidth + kPagePadding;
+    const float right = origin.x + ImGui::GetWindowWidth() - kPagePadding;
+    ImFont* const titleFont = fonts().title;
+    drawIcon(drawList, icon, ImVec2(left + 10.f, origin.y + 20.f), color(palette::kAccent), 1.2f);
+    if (titleFont) {
+        drawList->AddText(titleFont, titleFont->FontSize, ImVec2(left + 26.f, origin.y + 9.f),
+                          color(palette::kText), title);
+    }
+    ImFont* const captionFont = fonts().caption;
+    if (!captionFont) {
+        return;
+    }
+    const bool host = snapshot.session.world.has(WorldFeature::Host);
+    std::array<char, 48> status{};
+    std::snprintf(status.data(), status.size(), "%s  \xC2\xB7  %.0f fps", host ? "HOST" : "CLIENT",
+                  static_cast<double>(frame.framesPerSecond));
+    const ImVec2 statusSize =
+        captionFont->CalcTextSizeA(captionFont->FontSize, 1000.f, 0.f, status.data());
+    drawList->AddText(captionFont, captionFont->FontSize,
+                      ImVec2(right - statusSize.x, origin.y + 14.f), color(palette::kMuted),
+                      status.data());
+    drawList->AddCircleFilled(ImVec2(right - statusSize.x - 9.f, origin.y + 20.5f), 3.f,
+                              color(host ? palette::kGood : palette::kMuted), 10);
+}
+
+void Interface::drawFooter(std::string_view runtimeStatus, const MenuConfiguration& configuration) {
+    ImFont* const captionFont = fonts().caption;
+    if (!captionFont) {
+        return;
+    }
+    ImDrawList* const drawList = ImGui::GetWindowDrawList();
+    const ImVec2 origin = ImGui::GetWindowPos();
+    const float top = origin.y + ImGui::GetWindowHeight() - kFooterHeight;
+    const float textY = top + (kFooterHeight - captionFont->FontSize) * 0.5f;
+    const float capY = top + (kFooterHeight - 16.f) * 0.5f;
+    const float left = origin.x + 16.f;
+    float right = origin.x + ImGui::GetWindowWidth() - 14.f;
+    const auto text = [&](const char* value, const ImVec4& tint) {
+        right -= captionFont->CalcTextSizeA(captionFont->FontSize, 1000.f, 0.f, value).x;
+        drawList->AddText(captionFont, captionFont->FontSize, ImVec2(right, textY), color(tint),
+                          value);
+        right -= 6.f;
+    };
+    const auto keyCap = [&](const char* key) {
+        right -= keyCapWidth(key);
+        drawKeyCap(drawList, ImVec2(right, capY), key);
+        right -= 6.f;
+    };
+    text("close", palette::kFaint);
+    keyCap("Esc");
+    keyCap(menuKeyName(configuration.menuKey));
+    right -= 8.f;
+    std::array<char, 64> status{};
+    std::snprintf(status.data(), status.size(), "%.*s",
+                  static_cast<int>(std::min<std::size_t>(runtimeStatus.size(), 48U)),
+                  runtimeStatus.empty() ? "" : runtimeStatus.data());
+    text(status.data(), palette::kFaint);
+    if (!mHint) {
+        return;
+    }
+    const ImVec4 clip(left, top, right - 10.f, top + kFooterHeight);
+    drawList->AddText(captionFont, captionFont->FontSize, ImVec2(left, textY),
+                      color(palette::kText), mHint, nullptr, 0.f, &clip);
+}
+
+void Interface::drawPlayerPicker(PlayerPicker picker, const MenuSnapshot& snapshot,
+                                 std::optional<std::uint64_t>& selected) {
+    const PlayerSnapshot& players = snapshot.playerFrame.players;
+    const PlayerSnapshotPlayer* const current = selected ? findPlayer(players, *selected) : nullptr;
+    if (selected && (!current || current->dead)) {
+        selected.reset();
+    }
+    std::size_t rows = picker.habitatLabel ? 1 : 0;
+    for (const PlayerSnapshotPlayer& player : players) {
+        if (player.dead) {
+            continue;
+        }
+        ++rows;
+        if (!selected && !picker.habitatLabel && (player.local || !localPlayer(players))) {
+            selected = player.clientId;
+        }
+    }
+    if (rows == 0) {
+        return;
+    }
+    const float rowPitch = kListRowHeight + ImGui::GetStyle().ItemSpacing.y;
+    const float height =
+        static_cast<float>(std::min(rows, picker.visibleRows)) * rowPitch + kCardPadding * 2.f;
+    if (beginCard(picker.id, ImVec2(0.f, height))) {
+        if (picker.habitatLabel) {
+            if (listRow({.label = picker.habitatLabel}, !selected)) {
+                selected.reset();
+            }
+        }
+        for (const PlayerSnapshotPlayer& player : players) {
+            if (player.dead) {
+                continue;
+            }
+            ImGui::PushID(static_cast<int>(player.clientId & 0x7fffffffU));
+            if (listRow({.label = player.local ? "You" : player.name.c_str(),
+                         .detail = locationName(snapshot.session.location(player.clientId))},
+                        selected && *selected == player.clientId)) {
+                selected = player.clientId;
+            }
+            ImGui::PopID();
+        }
     }
     ImGui::EndChild();
 }
 
-void Interface::drawSettingsTab(MenuConfiguration& configuration) {
-    sectionLabel("CONTROLS");
-    ImGui::TextUnformatted("Menu key");
-    ImGui::SameLine(140.f);
-    if (mCapturingMenuKey) {
-        if (actionButton("press key...", 120.f))
-            mCapturingMenuKey = false;
-    } else {
-        ImGui::PushID("menukey");
-        if (ImGui::Button(menuKeyName(configuration.menuKey), ImVec2(120.f, 0.f)))
-            mCapturingMenuKey = true;
-        ImGui::PopID();
+void Interface::drawPreview(PreviewKind kind, std::optional<std::size_t> catalogIndex) {
+    ImGui::Dummy(ImVec2(0.f, kColumnGap - ImGui::GetStyle().ItemSpacing.y * 2.f));
+    if (beginCard("##preview", ImVec2(kListWidth, kPreviewHeight))) {
+        sectionTitle(Icon::Visuals, "MODEL");
+        const ImVec2 position = ImGui::GetCursorScreenPos();
+        const ImVec2 size = ImGui::GetContentRegionAvail();
+        drawIcon(ImGui::GetWindowDrawList(), Icon::Items,
+                 ImVec2(position.x + size.x * 0.5f, position.y + size.y * 0.5f),
+                 color(palette::kFaint), 1.6f);
+        if (catalogIndex && size.x > 0.f && size.y > 0.f) {
+            mPreview = MenuPreview{kind,
+                                   static_cast<std::uint16_t>(*catalogIndex),
+                                   {position.x, position.y, size.x, size.y}};
+        }
     }
-    if (mCapturingMenuKey && ImGui::IsKeyPressed(ImGuiKey_Escape))
-        mCapturingMenuKey = false;
-    if (mCapturingMenuKey) {
-        for (int keyValue = ImGuiKey_NamedKey_BEGIN; keyValue < ImGuiKey_NamedKey_END; ++keyValue) {
-            if (keyValue == ImGuiKey_Escape)
-                continue;
-            if (!ImGui::IsKeyPressed(static_cast<ImGuiKey>(keyValue)))
-                continue;
-            MenuKey menuKey;
-            if (!translateMenuKey(static_cast<ImGuiKey>(keyValue), menuKey))
-                continue;
-            configuration.menuKey = menuKey;
-            mCapturingMenuKey = false;
+    ImGui::EndChild();
+}
+
+void Interface::drawSelfPage(const MenuSnapshot& snapshot, MenuConfiguration& configuration) {
+    const SessionState& session = snapshot.session;
+    const float width = columnWidth();
+    if (beginCard("##self_player", ImVec2(width, 0.f))) {
+        sectionTitle(Icon::Move, "MOVEMENT");
+        configSwitch("Infinite stamina", "Keeps your sprint meter full.",
+                     configuration.infiniteStamina);
+        configSwitch("No carry weight", "Carried items never slow you down.",
+                     configuration.noWeight);
+        constexpr std::array<const char*, 6> flyKeys = {"W", "A", "S", "D", "Space", "Ctrl"};
+        if (switchRow("Fly", session.switches.has(SessionSwitch::Fly), flyKeys)) {
+            queueAction({PlayerAction::ToggleFly, NoPlayerActionPayload{}});
+        }
+        noteHint(mHint, "W A S D to move, Space to rise, Ctrl or C to sink.");
+        constexpr std::array<const char*, 2> emoteKeys = {"1", "2"};
+        if (switchRow("Emote while moving", session.switches.has(SessionSwitch::EmoteWhileMoving),
+                      emoteKeys)) {
+            queueAction({PlayerAction::SlideTaunt, NoPlayerActionPayload{}});
+        }
+        noteHint(mHint, "Press 1 or 2 to emote without stopping.");
+        sectionTitle(Icon::Battery, "GEAR");
+        configSwitch("Infinite battery", "Keeps every battery item you carry fully charged.",
+                     configuration.infiniteBattery);
+        configSwitch("Extended inventory",
+                     "Grows your inventory to 32 slots. Other players see only the first four.",
+                     configuration.extendedInventory);
+        sectionTitle(Icon::Sound, "SENSES");
+        sessionSwitch("Third person", "Moves your camera behind your own character.",
+                      session.switches.has(SessionSwitch::ThirdPerson),
+                      PlayerAction::ToggleThirdPerson);
+        sessionSwitch("Hear everyone",
+                      "Plays every player's voice at full volume, any distance, alive or dead.",
+                      session.switches.has(SessionSwitch::HearEveryone),
+                      PlayerAction::ToggleHearEveryone);
+    }
+    ImGui::EndChild();
+    ImGui::SameLine(0.f, kColumnGap);
+    if (beginCard("##self_status", ImVec2(0.f, 0.f))) {
+        sectionTitle(Icon::Pulse, "STATUS");
+        std::array<char, 32> value{};
+        const float stamina = std::clamp(snapshot.playerFrame.sprintMeter, 0.f, 1.f);
+        std::snprintf(value.data(), value.size(), "%.0f%%", static_cast<double>(stamina * 100.f));
+        meterRow("Stamina", value.data(), stamina);
+        const float carried = std::clamp(snapshot.playerFrame.carryWeight - 1.f, 0.f, 100.f);
+        std::snprintf(value.data(), value.size(), "%.0f lb",
+                      static_cast<double>(carried * kPoundsPerCarryUnit));
+        meterRow("Carried weight", value.data(), carried);
+        const PlayerSnapshotPlayer* const local = localPlayer(snapshot.playerFrame.players);
+        if (local && local->dead) {
+            noteText("You are dead. Your actions return when you are alive again.");
+        } else if (local) {
+            std::snprintf(value.data(), value.size(), "%d", local->health);
+            meterRow("Health", value.data(), static_cast<float>(local->health) / 100.f);
+            sectionTitle(Icon::Bolt, "ACTIONS");
+            command("Heal yourself", "Restores your health to full and stops bleeding.",
+                    {PlayerAction::HealSelf, NoPlayerActionPayload{}});
+            dangerCommand("Kill yourself", "Kills your own character right now.",
+                          {PlayerAction::Kill, PlayerTargetPayload{local->clientId}});
+        } else {
+            noteText("Join a game to see your character.");
+        }
+    }
+    ImGui::EndChild();
+}
+
+void Interface::drawVisualsPage(MenuConfiguration& configuration) {
+    struct CategoryEntry {
+        EspCategory category;
+        const char* label;
+        const char* title;
+        const char* hint;
+        bool EspConfig::* enabled;
+    };
+    constexpr std::array<CategoryEntry, 6> categories = {{
+        {EspCategory::Players, "Players", "PLAYERS", "Marks every other living player.",
+         &EspConfig::players},
+        {EspCategory::Scrap, "Scrap", "SCRAP", "Marks loose scrap that nobody is holding.",
+         &EspConfig::items},
+        {EspCategory::Enemies, "Enemies", "ENEMIES", "Marks every living enemy.",
+         &EspConfig::monsters},
+        {EspCategory::Entrance, "Main entrance", "THE MAIN ENTRANCE",
+         "Marks the facility's main entrance doors.", &EspConfig::exits},
+        {EspCategory::FireExits, "Fire exits", "FIRE EXITS", "Marks the facility's fire exits.",
+         &EspConfig::fireExits},
+        {EspCategory::Ship, "Ship", "THE SHIP", "Marks your ship.", &EspConfig::ships},
+    }};
+
+    EspConfig& esp = configuration.esp;
+    const float width = columnWidth();
+    if (beginCard("##visuals_marks", ImVec2(width, 0.f))) {
+        sectionTitle(Icon::Visuals, "SHOW");
+        for (const CategoryEntry& entry : categories) {
+            configSwitch(entry.label, entry.hint, esp.*entry.enabled);
+        }
+        std::array<char, 40> colorTitle{};
+        std::snprintf(colorTitle.data(), colorTitle.size(), "COLOR OF %s",
+                      categories[static_cast<std::size_t>(mColorCategory)].title);
+        sectionTitle(Icon::Palette, colorTitle.data());
+        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 8.f);
+        for (const CategoryEntry& entry : categories) {
+            const int index = static_cast<int>(entry.category);
+            const std::array<float, 4>& swatch = espColor(esp, index);
+            const bool selected = mColorCategory == entry.category;
+            ImGui::PushID(index);
+            ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, selected ? 1.f : 0.f);
+            ImGui::PushStyleColor(ImGuiCol_Border, palette::kAccent);
+            if (ImGui::ColorButton("##swatch", ImVec4(swatch[0], swatch[1], swatch[2], 1.f),
+                                   ImGuiColorEditFlags_NoTooltip | ImGuiColorEditFlags_NoAlpha |
+                                       ImGuiColorEditFlags_NoDragDrop,
+                                   ImVec2(34.f, 16.f))) {
+                mColorCategory = entry.category;
+            }
+            ImGui::PopStyleColor();
+            ImGui::PopStyleVar();
+            noteHint(mHint, entry.label);
+            ImGui::PopID();
+            ImGui::SameLine(0.f, 5.f);
+        }
+        ImGui::NewLine();
+        std::array<float, 4>& edited = espColor(esp, static_cast<int>(mColorCategory));
+        constexpr std::array<const char*, 3> channels = {"Red", "Green", "Blue"};
+        for (std::size_t channel = 0; channel < channels.size(); ++channel) {
+            int level = static_cast<int>(edited[channel] * 255.f + 0.5f);
+            if (sliderRow(channels[channel], level, {.minimum = 0, .maximum = 255}, "%d")) {
+                edited[channel] = static_cast<float>(level) / 255.f;
+                markConfigChanged();
+            }
+        }
+        if (mColorCategory == EspCategory::Scrap && esp.useScrapTiers) {
+            noteText("Scrap uses its value colors while Color scrap by value is on.");
+        }
+    }
+    ImGui::EndChild();
+    ImGui::SameLine(0.f, kColumnGap);
+    if (beginCard("##visuals_options", ImVec2(0.f, 0.f))) {
+        sectionTitle(Icon::Settings, "STYLE");
+        configSwitch("Outlines", "Draws a glowing outline around each marked model.", esp.outlines);
+        configSwitch("Names", "Writes the name above each mark.", esp.names);
+        configSwitch("Scrap values", "Writes the sell value next to each piece of scrap.",
+                     esp.values);
+        configSwitch("Distance", "Writes how many meters away each mark is.", esp.distance);
+        configSwitch("Tracer lines", "Draws a line from the bottom of your screen to each mark.",
+                     esp.lines);
+        configSwitch("Color scrap by value",
+                     "Colors scrap by how much it sells for instead of the scrap color.",
+                     esp.useScrapTiers);
+        int maximumDistance = static_cast<int>(esp.maxDistance + 0.5f);
+        if (sliderRow("Range", maximumDistance, {.minimum = 10, .maximum = 1000}, "%d m")) {
+            esp.maxDistance = static_cast<float>(maximumDistance);
             markConfigChanged();
-            break;
+        }
+        noteHint(mHint, "Marks farther away than this are hidden.");
+        sectionTitle(Icon::Bell, "ALERTS");
+        configSwitch("Death notifications", "Shows a popup whenever a player dies.",
+                     esp.deathNotifications);
+    }
+    ImGui::EndChild();
+}
+
+void Interface::drawPlayersPage(const MenuSnapshot& snapshot) {
+    const SessionState& session = snapshot.session;
+    const PlayerSnapshot& players = snapshot.playerFrame.players;
+    if (players.empty()) {
+        noteText("No players yet. Join or host a game first.");
+        return;
+    }
+    if (mSelectedPlayer && !findPlayer(players, *mSelectedPlayer)) {
+        mSelectedPlayer.reset();
+    }
+    if (!mSelectedPlayer) {
+        mSelectedPlayer = players[0].clientId;
+    }
+
+    if (beginCard("##player_list", ImVec2(190.f, 0.f))) {
+        sectionTitle(Icon::Players, "PLAYERS");
+        for (const PlayerSnapshotPlayer& player : players) {
+            const std::array<char, kPlayerListLabelCapacity> label = playerListLabel(player);
+            ImGui::PushID(static_cast<int>(player.clientId & 0x7fffffffU));
+            if (listRow({.label = label.data(),
+                         .detail = player.dead ? "dead" : "",
+                         .dot = player.dead ? palette::kDanger : palette::kGood},
+                        *mSelectedPlayer == player.clientId)) {
+                mSelectedPlayer = player.clientId;
+            }
+            ImGui::PopID();
+        }
+    }
+    ImGui::EndChild();
+    ImGui::SameLine(0.f, kColumnGap);
+
+    const bool detailVisible = beginCard("##player_detail", ImVec2(0.f, 0.f));
+    const PlayerSnapshotPlayer* const selected = findPlayer(players, *mSelectedPlayer);
+    if (!detailVisible || !selected) {
+        ImGui::EndChild();
+        return;
+    }
+    const PlayerSnapshotPlayer& player = *selected;
+    const PlayerTargetPayload target{player.clientId};
+    const bool host = session.world.has(WorldFeature::Host);
+    const bool canDie = session.world.has(WorldFeature::PlayersCanDie);
+
+    sectionTitle(Icon::Info, "DETAILS");
+    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 8.f);
+    ImGui::TextColored(palette::kMuted, "Steam %llu   \xC2\xB7   slot %llu",
+                       static_cast<unsigned long long>(player.steamId),
+                       static_cast<unsigned long long>(player.clientId));
+    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 8.f);
+    if (player.dead) {
+        ImGui::TextColored(palette::kDanger, "Dead");
+    } else {
+        ImGui::TextColored(palette::kGood, "Alive");
+        ImGui::SameLine();
+        ImGui::TextColored(palette::kMuted, "\xC2\xB7   %d health   \xC2\xB7   %s", player.health,
+                           locationName(session.location(player.clientId)));
+    }
+
+    if (!player.dead) {
+        sectionTitle(Icon::Self, "PLAYER");
+        if (!player.local) {
+            command("Teleport to player", "Moves you to where this player is standing.",
+                    {PlayerAction::TeleportTo, target});
+        }
+        if (player.local || canDie) {
+            dangerCommand("Kill player", "Deals lethal damage so the player dies normally.",
+                          {PlayerAction::Kill, target});
+        }
+        if (player.local) {
+            command("Clear insanity", "Resets your fear level to zero.",
+                    {PlayerAction::ClearInsanity, target});
+            command("Max insanity", "Raises your fear level to its maximum.",
+                    {PlayerAction::MaxInsanity, target});
+        } else if (host) {
+            command("Mark for the ghost girl",
+                    "Makes the ghost girl far more likely to pick this player to haunt.",
+                    {PlayerAction::MaxInsanity, target});
+            command("Unmark for the ghost girl", "Removes the ghost girl mark from this player.",
+                    {PlayerAction::ClearInsanity, target});
+        }
+
+        sectionTitle(Icon::Enemies, "ENEMIES");
+        if (session.world.has(WorldFeature::EnemiesAlive)) {
+            const bool luredHere = session.lure && session.lure->clientId == player.clientId;
+            const bool timedLure = luredHere && session.lure->secondsLeft.has_value();
+            const bool persistentLure = luredHere && !session.lure->secondsLeft.has_value();
+            if (switchRow("Lure enemies for 30 s", timedLure)) {
+                queueAction({PlayerAction::LureAllEnemies, target});
+            }
+            noteHint(mHint, "Draws enemies to this player for 30 seconds, then lets them go.");
+            if (switchRow("Persistent targeting", persistentLure)) {
+                queueAction({PlayerAction::TogglePersistentLure, target});
+            }
+            noteHint(mHint,
+                     "Every enemy that can reach this player hunts only them until you turn it "
+                     "off.");
+            command("Teleport enemies here",
+                    "Moves every enemy that lives in this player's area next to them.",
+                    {PlayerAction::TeleportAllEnemies, target});
+        } else {
+            noteText("No living enemies on this map.");
         }
     }
 
-    sectionLabel("PERFORMANCE");
-    ImGui::SetNextItemWidth(-1.f);
-    if (boundedSlider("##poll", configuration.pollRate, {.minimum = 10.f, .maximum = 90.f},
-                      "Camera %.0f Hz")) {
-        markConfigChanged();
+    if (players.size() > 1) {
+        sectionTitle(Icon::Players, "EVERYONE");
+        if (canDie) {
+            dangerCommand("Kill everyone", "Kills every player, including you.",
+                          {PlayerAction::KillAll, NoPlayerActionPayload{}});
+            dangerCommand("Kill everyone but me", "Kills every other player.",
+                          {PlayerAction::KillAllExceptLocal, NoPlayerActionPayload{}});
+        } else {
+            noteText("Other players cannot die while the ship is in orbit.");
+        }
     }
-    ImGui::SetNextItemWidth(-1.f);
-    if (boundedSlider("##tick", configuration.tickIntervalMs, {.minimum = 33, .maximum = 500},
-                      "Write every %d ms")) {
-        markConfigChanged();
-    }
-
-    sectionLabel("CONFIG");
-    if (actionButton("Save", 120.f))
-        requestConfigSave();
+    ImGui::EndChild();
 }
 
+void Interface::drawEnemiesPage(const MenuSnapshot& snapshot, const RuntimeCatalogs& catalogs) {
+    const bool host = snapshot.session.world.has(WorldFeature::Host);
+    if (!host) {
+        mSpawnKind = SpawnKind::Enemies;
+    }
+    if (mSpawnKind == SpawnKind::Traps) {
+        drawTrapTypes(snapshot, catalogs);
+    } else {
+        drawEnemyTypes(snapshot, catalogs);
+    }
+}
+
+void Interface::drawEnemyTypes(const MenuSnapshot& snapshot, const RuntimeCatalogs& catalogs) {
+    const SessionState& session = snapshot.session;
+    const bool host = session.world.has(WorldFeature::Host);
+    const std::size_t enemyCount = catalogs.enemyCount();
+    if (mEnemyTarget && !findPlayer(snapshot.playerFrame.players, *mEnemyTarget)) {
+        mEnemyTarget.reset();
+    }
+    std::optional<EnemyHabitat> requiredHabitat;
+    if (mEnemyTarget) {
+        requiredHabitat = session.location(*mEnemyTarget) == PlayerLocation::Facility
+                              ? EnemyHabitat::Facility
+                              : EnemyHabitat::Outside;
+    }
+    const auto spawnable = [&](const EnemyCatalogEntry& entry) {
+        return host && entry.traits.loadedMap == EnemyMapSupport::Supported &&
+               (!requiredHabitat || entry.traits.habitat == *requiredHabitat);
+    };
+    const auto summonable = [&](const EnemyCatalogEntry& entry) {
+        return requiredHabitat && entry.activeCount > 0 && entry.traits.habitat == *requiredHabitat;
+    };
+
+    const bool previews = session.world.has(WorldFeature::ModelPreviews);
+    std::optional<EnemyCatalogEntry> chosen;
+    std::optional<EnemyCatalogEntry> firstListed;
+    ImGui::BeginGroup();
+    if (beginCard("##enemy_types",
+                  ImVec2(kListWidth, previews ? -(kPreviewHeight + kColumnGap) : 0.f))) {
+        if (host) {
+            const float half = (ImGui::GetContentRegionAvail().x - 4.f) * 0.5f;
+            segmentButton("Enemies", true, half);
+            ImGui::SameLine(0.f, 4.f);
+            if (segmentButton("Traps", false, half)) {
+                mSpawnKind = SpawnKind::Traps;
+            }
+            noteHint(mHint, "Turrets, landmines and the other facility traps.");
+        }
+        sectionTitle(Icon::List, host ? "TYPES THAT WORK THERE" : "LIVING TYPES");
+        std::array<char, kRuntimeCatalogNameCapacity + 1> label{};
+        std::array<char, 24> detail{};
+        for (std::size_t index = 0; index < enemyCount; ++index) {
+            const EnemyCatalogLookup lookup = catalogs.enemyAt(index);
+            if (lookup.result != CatalogLookupResult::Found ||
+                (!spawnable(lookup.entry) && !summonable(lookup.entry))) {
+                continue;
+            }
+            const EnemyCatalogEntry& entry = lookup.entry;
+            if (!firstListed) {
+                firstListed = entry;
+            }
+            std::snprintf(label.data(), label.size(), "%.*s", static_cast<int>(entry.name.size()),
+                          entry.name.data());
+            if (entry.activeCount > 0) {
+                std::snprintf(detail.data(), detail.size(), "%u alive", entry.activeCount);
+            } else if (requiredHabitat) {
+                detail[0] = '\0';
+            } else {
+                std::snprintf(detail.data(), detail.size(), "%s",
+                              entry.traits.habitat == EnemyHabitat::Outside ? "outside"
+                                                                            : "facility");
+            }
+            ImGui::PushID(static_cast<int>(index));
+            if (listRow({.label = label.data(), .detail = detail.data()},
+                        mSelectedEnemyType == index)) {
+                mSelectedEnemyType = index;
+            }
+            ImGui::PopID();
+            if (mSelectedEnemyType == index) {
+                chosen = entry;
+            }
+        }
+        if (!firstListed) {
+            if (!host) {
+                noteText(mEnemyTarget ? "No living enemy can reach this player. Only the host "
+                                        "can create new ones."
+                                      : "Pick a player to bring living enemies to. Only the "
+                                        "host can create new ones.");
+            } else if (enemyCount == 0) {
+                noteText("Enemy types appear once you are in a lobby.");
+            } else {
+                noteText(mEnemyTarget ? "No enemy type can live where this player is."
+                                      : "Land on a moon first. Enemies need a loaded map.");
+            }
+        }
+    }
+    ImGui::EndChild();
+    if (!chosen && firstListed) {
+        chosen = firstListed;
+        mSelectedEnemyType = firstListed->id.index;
+    }
+    if (previews) {
+        drawPreview(PreviewKind::Enemy,
+                    chosen ? std::optional<std::size_t>{chosen->id.index} : std::nullopt);
+    }
+    ImGui::EndGroup();
+    ImGui::SameLine(0.f, kColumnGap);
+
+    if (beginCard("##enemy_actions", ImVec2(0.f, 0.f))) {
+        sectionTitle(Icon::Pin, "WHERE");
+        drawPlayerPicker({.id = "##enemy_target",
+                          .habitatLabel = host ? "Random spot in its own area" : nullptr,
+                          .visibleRows = 4},
+                         snapshot, mEnemyTarget);
+        if (chosen) {
+            sliderRow("Count", mEnemyCount, {.minimum = 1, .maximum = kMaximumSpawnCount}, "%d");
+            if (mEnemyTarget) {
+                sliderRow("Distance", mEnemyDistanceMeters,
+                          {.minimum = 0, .maximum = kMaximumSpawnDistanceMeters},
+                          mEnemyDistanceMeters == 0 ? "next to them" : "about %d m away");
+                noteHint(mHint, "How far from the player the enemies appear.");
+            }
+            const std::uint8_t count = static_cast<std::uint8_t>(mEnemyCount);
+            const std::uint8_t distance = static_cast<std::uint8_t>(mEnemyDistanceMeters);
+            if (spawnable(*chosen)) {
+                if (mEnemyTarget) {
+                    command("Spawn at player", "Creates new enemies of this type near the player.",
+                            {PlayerAction::SpawnEnemyAtPlayer,
+                             EnemyAtPlayerPayload{chosen->id, count, *mEnemyTarget, distance}});
+                } else {
+                    command("Spawn",
+                            "Creates new enemies of this type at random spots it can live in.",
+                            {PlayerAction::SpawnEnemy, EnemySpawnPayload{chosen->id, count}});
+                }
+            }
+            if (mEnemyTarget && summonable(*chosen)) {
+                command("Bring living ones here",
+                        "Moves up to Count living enemies of this type to the player.",
+                        {PlayerAction::SummonEnemyTypeAtPlayer,
+                         EnemyAtPlayerPayload{chosen->id, count, *mEnemyTarget, distance}});
+            }
+        }
+        if (session.world.has(WorldFeature::EnemiesAlive)) {
+            sectionTitle(Icon::Enemies, "EVERY LIVING ENEMY");
+            dangerCommand("Kill all enemies",
+                          host ? "Kills every enemy and removes the ones that cannot die."
+                               : "Kills every enemy that can die.",
+                          {PlayerAction::KillAllEnemies, NoPlayerActionPayload{}});
+            command("Stun all enemies for 60 s",
+                    "Freezes every enemy that can be stunned. Touching one can still hurt.",
+                    {PlayerAction::StunAllEnemies, NoPlayerActionPayload{}});
+        }
+    }
+    ImGui::EndChild();
+}
+
+void Interface::drawTrapTypes(const MenuSnapshot& snapshot, const RuntimeCatalogs& catalogs) {
+    const bool moonLoaded = snapshot.session.world.has(WorldFeature::MoonLoaded);
+    const std::size_t trapCount = catalogs.hazardCount();
+    if (mSelectedTrapType >= trapCount) {
+        mSelectedTrapType = trapCount == 0 ? 0 : trapCount - 1;
+    }
+    const bool previews = snapshot.session.world.has(WorldFeature::ModelPreviews);
+    ImGui::BeginGroup();
+    if (beginCard("##trap_types",
+                  ImVec2(kListWidth, previews ? -(kPreviewHeight + kColumnGap) : 0.f))) {
+        const float half = (ImGui::GetContentRegionAvail().x - 4.f) * 0.5f;
+        if (segmentButton("Enemies", false, half)) {
+            mSpawnKind = SpawnKind::Enemies;
+        }
+        ImGui::SameLine(0.f, 4.f);
+        segmentButton("Traps", true, half);
+        sectionTitle(Icon::List, "TRAP TYPES");
+        if (trapCount == 0) {
+            noteText("Trap types appear once you are in a lobby.");
+        }
+        std::array<char, kRuntimeCatalogNameCapacity + 1> label{};
+        for (std::size_t index = 0; index < trapCount; ++index) {
+            const HazardCatalogLookup lookup = catalogs.hazardAt(index);
+            if (lookup.result != CatalogLookupResult::Found) {
+                continue;
+            }
+            std::snprintf(label.data(), label.size(), "%.*s",
+                          static_cast<int>(lookup.entry.name.size()), lookup.entry.name.data());
+            ImGui::PushID(static_cast<int>(index));
+            if (listRow({.label = label.data()}, mSelectedTrapType == index)) {
+                mSelectedTrapType = index;
+            }
+            ImGui::PopID();
+        }
+    }
+    ImGui::EndChild();
+    if (previews) {
+        drawPreview(PreviewKind::Trap,
+                    trapCount == 0 ? std::nullopt : std::optional<std::size_t>{mSelectedTrapType});
+    }
+    ImGui::EndGroup();
+    ImGui::SameLine(0.f, kColumnGap);
+
+    if (beginCard("##trap_actions", ImVec2(0.f, 0.f))) {
+        sectionTitle(Icon::Pin, "NEAR");
+        const HazardCatalogLookup chosen = catalogs.hazardAt(mSelectedTrapType);
+        if (!moonLoaded) {
+            noteText("Land on a moon first. Traps need a loaded map.");
+        } else {
+            drawPlayerPicker({.id = "##trap_target", .habitatLabel = nullptr, .visibleRows = 4},
+                             snapshot, mTrapTarget);
+            if (mTrapTarget && chosen.result == CatalogLookupResult::Found) {
+                sliderRow("Count", mTrapCount, {.minimum = 1, .maximum = kMaximumSpawnCount}, "%d");
+                sliderRow("Distance", mTrapDistanceMeters,
+                          {.minimum = 0, .maximum = kMaximumSpawnDistanceMeters},
+                          mTrapDistanceMeters == 0 ? "at their feet" : "about %d m away");
+                noteHint(mHint, "How far from the player the traps are placed.");
+                command("Place near player",
+                        "Creates working traps of this type on the floor near the player.",
+                        {PlayerAction::SpawnHazardAtPlayer,
+                         HazardAtPlayerPayload{chosen.entry.id,
+                                               static_cast<std::uint8_t>(mTrapCount), *mTrapTarget,
+                                               static_cast<std::uint8_t>(mTrapDistanceMeters)}});
+            } else if (!mTrapTarget) {
+                noteText("No living player to place traps near.");
+            }
+        }
+    }
+    ImGui::EndChild();
+}
+
+void Interface::drawItemsPage(const MenuSnapshot& snapshot, const RuntimeCatalogs& catalogs) {
+    const SessionState& session = snapshot.session;
+    const bool host = session.world.has(WorldFeature::Host);
+    const bool desk = session.world.has(WorldFeature::CompanyDesk);
+    if (!host) {
+        if (beginCard("##items_client", ImVec2(0.f, 0.f))) {
+            if (desk) {
+                sectionTitle(Icon::Coin, "COMPANY");
+                command("Put all ship scrap on the counter",
+                        "Places every piece of scrap in the ship on the sell counter.",
+                        {PlayerAction::DepositShipScrap, NoPlayerActionPayload{}});
+            }
+            noteText("Only the host can create items, move items, or change credits.");
+        }
+        ImGui::EndChild();
+        return;
+    }
+
+    const std::size_t itemCount = catalogs.itemCount();
+    if (mSelectedItemType >= itemCount) {
+        mSelectedItemType = itemCount == 0 ? 0 : itemCount - 1;
+    }
+    const bool previews = session.world.has(WorldFeature::ModelPreviews);
+    ImGui::BeginGroup();
+    if (beginCard("##item_types",
+                  ImVec2(kListWidth, previews ? -(kPreviewHeight + kColumnGap) : 0.f))) {
+        sectionTitle(Icon::List, "ITEM TYPES");
+        if (itemCount == 0) {
+            noteText("Item types appear once you are in a lobby.");
+        }
+        std::array<char, kRuntimeCatalogNameCapacity + 1> label{};
+        for (std::size_t index = 0; index < itemCount; ++index) {
+            const ItemCatalogLookup lookup = catalogs.itemAt(index);
+            if (lookup.result != CatalogLookupResult::Found) {
+                continue;
+            }
+            std::snprintf(label.data(), label.size(), "%.*s",
+                          static_cast<int>(lookup.entry.name.size()), lookup.entry.name.data());
+            ImGui::PushID(static_cast<int>(index));
+            if (listRow({.label = label.data()}, mSelectedItemType == index)) {
+                mSelectedItemType = index;
+            }
+            ImGui::PopID();
+        }
+    }
+    ImGui::EndChild();
+    if (previews) {
+        drawPreview(PreviewKind::Item,
+                    itemCount == 0 ? std::nullopt : std::optional<std::size_t>{mSelectedItemType});
+    }
+    ImGui::EndGroup();
+    ImGui::SameLine(0.f, kColumnGap);
+
+    if (beginCard("##item_actions", ImVec2(0.f, 0.f))) {
+        sectionTitle(Icon::Self, "GIVE TO");
+        drawPlayerPicker({.id = "##item_target", .habitatLabel = nullptr, .visibleRows = 3},
+                         snapshot, mItemTarget);
+        const ItemCatalogLookup chosen = catalogs.itemAt(mSelectedItemType);
+        if (mItemTarget) {
+            sliderRow("Count", mItemCount, {.minimum = 1, .maximum = kMaximumSpawnCount}, "%d");
+            if (switchRow("Set scrap value", mItemValueFixed)) {
+                mItemValueFixed = !mItemValueFixed;
+            }
+            noteHint(mHint, "Off rolls each scrap item's normal random value.");
+            if (mItemValueFixed) {
+                sliderRow("Value", mItemValue, {.minimum = 0, .maximum = kMaximumFixedScrapValue},
+                          "$%d", ImGuiSliderFlags_Logarithmic);
+                noteHint(mHint, "Every spawned scrap item sells for exactly this much.");
+            }
+            if (chosen.result == CatalogLookupResult::Found) {
+                const std::optional<int> value =
+                    mItemValueFixed ? std::optional<int>{mItemValue} : std::nullopt;
+                command("Spawn at player", "Drops new items on the floor in front of the player.",
+                        {PlayerAction::SpawnItemAtPlayer,
+                         ItemAtPlayerPayload{chosen.entry.id, static_cast<std::uint8_t>(mItemCount),
+                                             *mItemTarget, value}});
+            }
+            command("Bring every loose item here",
+                    "Moves every item that nobody is holding to the player's feet.",
+                    {PlayerAction::TeleportItemsToPlayer, PlayerTargetPayload{*mItemTarget}});
+        } else {
+            noteText("No player to give items to yet.");
+        }
+        if (desk) {
+            sectionTitle(Icon::Coin, "COMPANY");
+            command("Put all ship scrap on the counter",
+                    "Places every piece of scrap in the ship on the sell counter.",
+                    {PlayerAction::DepositShipScrap, NoPlayerActionPayload{}});
+        }
+        if (session.world.has(WorldFeature::Terminal)) {
+            sectionTitle(Icon::Coin, "CREDITS");
+            sliderRow("Amount", mCreditAmount,
+                      {.minimum = 1, .maximum = kMaximumTerminalCreditsPerAction}, "%d",
+                      ImGuiSliderFlags_Logarithmic);
+            command("Add credits", "Adds this many credits to the crew's terminal balance.",
+                    {PlayerAction::AddTerminalCredits, TerminalCreditsPayload{mCreditAmount}});
+        }
+    }
+    ImGui::EndChild();
+}
+
+void Interface::drawMoonsPage(const MenuSnapshot& snapshot, const RuntimeCatalogs& catalogs) {
+    const std::size_t moonCount = catalogs.moonCount();
+    if (mSelectedMoon >= moonCount) {
+        mSelectedMoon = moonCount == 0 ? 0 : moonCount - 1;
+    }
+    if (beginCard("##moon_list", ImVec2(kListWidth, 0.f))) {
+        sectionTitle(Icon::Moons, "MOONS");
+        if (moonCount == 0) {
+            noteText("Moons appear once you are in a lobby.");
+        }
+        std::array<char, kRuntimeCatalogNameCapacity + 1> label{};
+        for (std::size_t index = 0; index < moonCount; ++index) {
+            const MoonCatalogLookup lookup = catalogs.moonAt(index);
+            if (lookup.result != CatalogLookupResult::Found) {
+                continue;
+            }
+            std::snprintf(label.data(), label.size(), "%.*s",
+                          static_cast<int>(lookup.entry.name.size()), lookup.entry.name.data());
+            ImGui::PushID(static_cast<int>(index));
+            if (listRow({.label = label.data()}, mSelectedMoon == index)) {
+                mSelectedMoon = index;
+            }
+            ImGui::PopID();
+        }
+    }
+    ImGui::EndChild();
+    ImGui::SameLine(0.f, kColumnGap);
+
+    if (beginCard("##moon_actions", ImVec2(0.f, 0.f))) {
+        sectionTitle(Icon::Route, "ROUTE");
+        const MoonCatalogLookup chosen = catalogs.moonAt(mSelectedMoon);
+        if (chosen.result != CatalogLookupResult::Found) {
+            noteText("Pick a moon.");
+        } else if (!snapshot.session.world.has(WorldFeature::ShipInOrbit)) {
+            noteText("The ship must be in orbit and not already travelling to change course.");
+        } else {
+            command("Route the ship here", "Sets course for the selected moon at no cost.",
+                    {PlayerAction::TravelToMoon, MoonTravelPayload{chosen.entry.id}});
+        }
+        sectionTitle(Icon::Info, "NOTES");
+        noteText("Every moon the game knows is listed, including ones the terminal hides.");
+        noteText("(no map) moons have no terrain in the game files and land on Artifice's map "
+                 "with their own settings.");
+        noteText("(unlisted) moons only work while you host with nobody else connected.");
+    }
+    ImGui::EndChild();
+}
+
+void Interface::drawWorldPage(const MenuSnapshot& snapshot) {
+    const SessionState& session = snapshot.session;
+    const auto has = [&](WorldFeature feature) { return session.world.has(feature); };
+    const auto on = [&](SessionSwitch state) { return session.switches.has(state); };
+    const NoPlayerActionPayload none{};
+    const bool host = has(WorldFeature::Host);
+    const bool orbit = has(WorldFeature::ShipInOrbit);
+
+    const bool shipSection = has(WorldFeature::ShipHorn) || has(WorldFeature::ShipLights) ||
+                             has(WorldFeature::Terminal) || has(WorldFeature::Plushie) ||
+                             (has(WorldFeature::ShipDoor) && orbit) || (host && orbit);
+    const bool gearSection = has(WorldFeature::Shotguns) || has(WorldFeature::Jetpacks) ||
+                             has(WorldFeature::HauntedMasks) || on(SessionSwitch::JetpackTrap);
+    const bool facilitySection =
+        has(WorldFeature::Landmines) || has(WorldFeature::Turrets) ||
+        (host && (has(WorldFeature::FacilityPower) || has(WorldFeature::MainBridge) ||
+                  has(WorldFeature::HoardingBugNest))) ||
+        has(WorldFeature::SmallBridge) || has(WorldFeature::MineshaftElevator);
+    const bool leftColumn = shipSection || gearSection || has(WorldFeature::Cruiser);
+    const bool rightColumn = facilitySection || has(WorldFeature::CompanyDesk);
+    if (!leftColumn && !rightColumn) {
+        noteText("Nothing to control yet. Join or host a game first.");
+        return;
+    }
+
+    if (beginCard("##world_ship", ImVec2(columnWidth(), 0.f))) {
+        if (shipSection) {
+            sectionTitle(Icon::Ship, "SHIP");
+        }
+        if (has(WorldFeature::ShipHorn)) {
+            sessionSwitch("Horn", "Holds the ship's loud horn down.", on(SessionSwitch::ShipHorn),
+                          PlayerAction::ToggleShipHorn);
+        }
+        if (has(WorldFeature::ShipLights)) {
+            sessionSwitch("Lights", "Switches the ship's ceiling lights for everyone.",
+                          on(SessionSwitch::ShipLights), PlayerAction::ToggleShipLights);
+        }
+        if (has(WorldFeature::Terminal)) {
+            sessionSwitch("Terminal noise spam",
+                          "Plays the terminal's error beep ten times a second.",
+                          on(SessionSwitch::TerminalSound), PlayerAction::ToggleTerminalSound);
+        }
+        if (has(WorldFeature::ShipDoor) && orbit) {
+            sessionSwitch("Door buttons in orbit",
+                          "Lets you open the hangar door in space. Only you see it move.",
+                          on(SessionSwitch::ShipDoorButtons), PlayerAction::OpenShipDoorSpace);
+        }
+        if (has(WorldFeature::Plushie)) {
+            if (switchRow("Plushie squeak spam", on(SessionSwitch::PlushieSpam))) {
+                queueAction({PlayerAction::TogglePjManSpam,
+                             PlushieIntervalPayload{std::chrono::milliseconds{
+                                 static_cast<int>(mPlushieIntervalSeconds * 1000.f)}}});
+            }
+            noteHint(mHint, "Squeezes the pajama man plushie in the ship over and over.");
+            if (!on(SessionSwitch::PlushieSpam)) {
+                sliderRow("Squeak every", mPlushieIntervalSeconds, {.minimum = 0.f, .maximum = 1.f},
+                          "%.2f s");
+            }
+        }
+        if (host && orbit) {
+            dangerCommand("Fire the whole crew",
+                          "Ejects everyone into space and resets the save, like missing quota.",
+                          {PlayerAction::EjectEveryone, none});
+        }
+        if (has(WorldFeature::Cruiser)) {
+            sectionTitle(Icon::Car, "CRUISER");
+            sessionSwitch("Horn", "Holds the cruiser's horn down.", on(SessionSwitch::CruiserHorn),
+                          PlayerAction::ToggleCarHorn);
+            sessionSwitch("Ship magnet", "Switches the magnet that holds the cruiser to the ship.",
+                          on(SessionSwitch::CruiserMagnet), PlayerAction::ToggleVehicleMagnet);
+            command("Blow up the cruiser", "Destroys the cruiser in an explosion.",
+                    {PlayerAction::ExplodeCruiser, none});
+        }
+        if (gearSection) {
+            sectionTitle(Icon::Cog, "GEAR");
+        }
+        if (has(WorldFeature::Shotguns)) {
+            command("Fire every shotgun", "Fires every shotgun on the map once.",
+                    {PlayerAction::ShootAllShotguns, none});
+            sessionSwitch("Shotgun spam", "Fires every shotgun ten times a second.",
+                          on(SessionSwitch::ShotgunSpam), PlayerAction::ToggleShotgunSpam);
+        }
+        if (has(WorldFeature::Jetpacks)) {
+            command("Explode every jetpack", "Blows up every jetpack on the map.",
+                    {PlayerAction::ExplodeAllJetpacks, none});
+        }
+        if (has(WorldFeature::Jetpacks) || on(SessionSwitch::JetpackTrap)) {
+            sessionSwitch("Explode jetpacks when held",
+                          "Blows up any jetpack the moment someone is holding it.",
+                          on(SessionSwitch::JetpackTrap),
+                          PlayerAction::ToggleExplodeJetpacksOnGrab);
+        }
+        if (has(WorldFeature::HauntedMasks)) {
+            command("Turn masks into Masked",
+                    "Spawns a Masked enemy from every mask that can become one.",
+                    {PlayerAction::SpawnMaskedEnemy, none});
+        }
+        if (!leftColumn) {
+            noteText("The ship, cruiser and gear controls appear here when they exist.");
+        }
+    }
+    ImGui::EndChild();
+    ImGui::SameLine(0.f, kColumnGap);
+    if (beginCard("##world_map", ImVec2(0.f, 0.f))) {
+        if (facilitySection) {
+            sectionTitle(Icon::Building, "FACILITY");
+        }
+        if (has(WorldFeature::Landmines)) {
+            sessionSwitch("Landmines armed", "Arms or disarms every landmine.",
+                          on(SessionSwitch::LandminesArmed), PlayerAction::ToggleAllMines);
+            command("Detonate landmines", "Explodes every landmine right now.",
+                    {PlayerAction::BlowUpAllMines, none});
+        }
+        if (has(WorldFeature::Turrets)) {
+            sessionSwitch("Turrets active", "Switches every turret on or off.",
+                          on(SessionSwitch::TurretsActive), PlayerAction::ToggleAllTurrets);
+            command("Send turrets berserk",
+                    "Makes every turret spin and fire wildly for a few seconds.",
+                    {PlayerAction::BerserkAllTurrets, none});
+        }
+        if (host && has(WorldFeature::FacilityPower)) {
+            sessionSwitch("Power", "Switches the facility's lights and powered doors.",
+                          on(SessionSwitch::FacilityPower), PlayerAction::ToggleFactoryLights);
+        }
+        if (host && has(WorldFeature::MainBridge)) {
+            command("Collapse the main bridge", "Drops the large outdoor bridge.",
+                    {PlayerAction::ForceBridgeFall, none});
+        }
+        if (has(WorldFeature::SmallBridge)) {
+            command("Collapse the small bridge", "Drops the small wooden bridge.",
+                    {PlayerAction::ForceSmallBridgeFall, none});
+        }
+        if (has(WorldFeature::MineshaftElevator)) {
+            command("Press the elevator button", "Sends the mineshaft elevator to the other floor.",
+                    {PlayerAction::ToggleMineshaftElevator, none});
+        }
+        if (host && has(WorldFeature::HoardingBugNest)) {
+            command("Hoarding bug infestation",
+                    "Turns the facility's spawns into a hoarding bug swarm.",
+                    {PlayerAction::SpawnHoardingBugInfestation, none});
+        }
+        if (has(WorldFeature::CompanyDesk)) {
+            sectionTitle(Icon::Coin, "COMPANY");
+            command("Tentacle attack",
+                    "Makes the company monster grab whoever stands at the counter.",
+                    {PlayerAction::ForceTentacleAttack, none});
+            if (host) {
+                sessionSwitch(
+                    "Counter door spam", "Slams the sell counter's door open ten times a second.",
+                    on(SessionSwitch::DeskDoorSound), PlayerAction::ToggleDepositDeskSound);
+            }
+        }
+        if (!rightColumn) {
+            noteText("Landmines, turrets, bridges, the elevator and the company counter appear "
+                     "here on moons that have them.");
+        }
+    }
+    ImGui::EndChild();
+}
+
+void Interface::drawSettingsPage(MenuConfiguration& configuration, const MenuFrame& frame) {
+    if (mCapturingMenuKey && frame.pressedKey) {
+        if (configuration.menuKey != *frame.pressedKey) {
+            configuration.menuKey = *frame.pressedKey;
+            markConfigChanged();
+        }
+        mCapturingMenuKey = false;
+    }
+    if (beginCard("##settings", ImVec2(columnWidth(), 0.f))) {
+        sectionTitle(Icon::Key, "MENU KEY");
+        if (ImGui::Button(mCapturingMenuKey ? "Press the new key" : "Open and close the menu",
+                          ImVec2(-1.f, kRowHeight))) {
+            mCapturingMenuKey = !mCapturingMenuKey;
+        }
+        if (!mCapturingMenuKey) {
+            const char* const key = menuKeyName(configuration.menuKey);
+            const ImVec2 minimum = ImGui::GetItemRectMin();
+            const ImVec2 maximum = ImGui::GetItemRectMax();
+            drawKeyCap(
+                ImGui::GetWindowDrawList(),
+                ImVec2(maximum.x - keyCapWidth(key) - 8.f, (minimum.y + maximum.y) * 0.5f - 8.f),
+                key);
+        }
+        noteHint(mHint, mCapturingMenuKey
+                            ? "Press a letter, digit, F key, Insert, Tab, Enter or Space. Click "
+                              "again to cancel."
+                            : "Click, then press the key that should open and close this menu.");
+
+        sectionTitle(Icon::Gauge, "PERFORMANCE");
+        int refreshRate = static_cast<int>(configuration.pollRate + 0.5f);
+        if (sliderRow("Player data", refreshRate, {.minimum = 10, .maximum = 90},
+                      "%d times a second")) {
+            configuration.pollRate = static_cast<float>(refreshRate);
+            markConfigChanged();
+        }
+        noteHint(mHint, "How often the menu re-reads players, stamina and weight.");
+        if (sliderRow("Self cheats", configuration.tickIntervalMs, {.minimum = 33, .maximum = 500},
+                      "every %d ms")) {
+            markConfigChanged();
+        }
+        noteHint(mHint, "How often infinite stamina and no carry weight are re-applied.");
+
+        sectionTitle(Icon::Save, "CONFIGURATION");
+        if (commandRow("Save settings now", CommandTone::Neutral)) {
+            requestConfigSave();
+        }
+        noteHint(mHint, "Settings also save by themselves shortly after every change.");
+    }
+    ImGui::EndChild();
+    ImGui::SameLine(0.f, kColumnGap);
+    if (beginCard("##keys", ImVec2(0.f, 0.f))) {
+        struct KeyRow {
+            const char* label;
+            std::span<const char* const> keys;
+        };
+        const char* const menuKey = menuKeyName(configuration.menuKey);
+        const std::array<const char*, 1> openKeys = {menuKey};
+        constexpr std::array<const char*, 1> closeKeys = {"Esc"};
+        constexpr std::array<const char*, 4> moveKeys = {"W", "A", "S", "D"};
+        constexpr std::array<const char*, 1> riseKeys = {"Space"};
+        constexpr std::array<const char*, 2> sinkKeys = {"Ctrl", "C"};
+        constexpr std::array<const char*, 2> emoteKeys = {"1", "2"};
+        const std::array<KeyRow, 6> rows = {{
+            {"Open or close the menu", openKeys},
+            {"Close the menu", closeKeys},
+            {"Fly around", moveKeys},
+            {"Fly up", riseKeys},
+            {"Fly down", sinkKeys},
+            {"Emote while moving", emoteKeys},
+        }};
+        sectionTitle(Icon::Keyboard, "KEYS");
+        ImDrawList* const drawList = ImGui::GetWindowDrawList();
+        for (const KeyRow& row : rows) {
+            ImGui::Dummy(ImVec2(ImGui::GetContentRegionAvail().x, kRowHeight));
+            const ImVec2 minimum = ImGui::GetItemRectMin();
+            const ImVec2 maximum = ImGui::GetItemRectMax();
+            drawList->AddText(
+                ImVec2(minimum.x + 8.f, minimum.y + (kRowHeight - ImGui::GetFontSize()) * 0.5f),
+                color(palette::kText), row.label);
+            float right = maximum.x - 8.f;
+            for (std::size_t index = row.keys.size(); index > 0; --index) {
+                const char* const key = row.keys[index - 1];
+                right -= keyCapWidth(key);
+                drawKeyCap(drawList, ImVec2(right, minimum.y + (kRowHeight - 16.f) * 0.5f), key);
+                right -= 3.f;
+            }
+        }
+    }
+    ImGui::EndChild();
+}
 }

@@ -17,7 +17,7 @@ enum class PlayerAction : std::uint8_t {
     None = 0,
     TeleportTo,
     Kill,
-    Heal,
+    HealSelf,
     KillAll,
     KillAllExceptLocal,
     LureAllEnemies,
@@ -63,6 +63,8 @@ enum class PlayerAction : std::uint8_t {
     AddTerminalCredits,
     ToggleThirdPerson,
     TravelToMoon,
+    ToggleHearEveryone,
+    SpawnHazardAtPlayer,
 };
 
 enum class PlayerActionPayloadKind : std::uint8_t {
@@ -75,9 +77,8 @@ enum class PlayerActionPayloadKind : std::uint8_t {
     PlushieInterval,
     TerminalCredits,
     MoonTravel,
+    HazardAtPlayer,
 };
-
-enum class EnemySpawnArea : std::uint8_t { Inside, Outside };
 
 struct NoPlayerActionPayload {};
 
@@ -85,23 +86,34 @@ struct PlayerTargetPayload {
     std::uint64_t clientId;
 };
 
+inline constexpr std::uint8_t kMaximumSpawnCount = 20;
+inline constexpr std::uint8_t kMaximumSpawnDistanceMeters = 60;
+inline constexpr int kMaximumFixedScrapValue = 10000;
+
 struct EnemySpawnPayload {
     EnemyTypeId enemyType;
     std::uint8_t count;
-    EnemySpawnArea area;
 };
 
 struct EnemyAtPlayerPayload {
     EnemyTypeId enemyType;
     std::uint8_t count;
-    EnemySpawnArea area;
     std::uint64_t clientId;
+    std::uint8_t distanceMeters;
 };
 
 struct ItemAtPlayerPayload {
     ItemTypeId itemType;
     std::uint8_t count;
     std::uint64_t clientId;
+    std::optional<int> fixedScrapValue;
+};
+
+struct HazardAtPlayerPayload {
+    HazardTypeId hazardType;
+    std::uint8_t count;
+    std::uint64_t clientId;
+    std::uint8_t distanceMeters;
 };
 
 struct PlushieIntervalPayload {
@@ -121,7 +133,7 @@ struct MoonTravelPayload {
 using PlayerActionPayload =
     std::variant<NoPlayerActionPayload, PlayerTargetPayload, EnemySpawnPayload,
                  EnemyAtPlayerPayload, ItemAtPlayerPayload, PlushieIntervalPayload,
-                 TerminalCreditsPayload, MoonTravelPayload>;
+                 TerminalCreditsPayload, MoonTravelPayload, HazardAtPlayerPayload>;
 
 struct PlayerActionRequest {
     PlayerAction action = PlayerAction::None;
@@ -156,7 +168,6 @@ constexpr PlayerActionPayloadKind playerActionPayloadKind(PlayerAction action) n
         return PlayerActionPayloadKind::Invalid;
     case PlayerAction::TeleportTo:
     case PlayerAction::Kill:
-    case PlayerAction::Heal:
     case PlayerAction::LureAllEnemies:
     case PlayerAction::TeleportAllEnemies:
     case PlayerAction::TogglePersistentLure:
@@ -177,6 +188,9 @@ constexpr PlayerActionPayloadKind playerActionPayloadKind(PlayerAction action) n
         return PlayerActionPayloadKind::TerminalCredits;
     case PlayerAction::TravelToMoon:
         return PlayerActionPayloadKind::MoonTravel;
+    case PlayerAction::SpawnHazardAtPlayer:
+        return PlayerActionPayloadKind::HazardAtPlayer;
+    case PlayerAction::HealSelf:
     case PlayerAction::KillAll:
     case PlayerAction::KillAllExceptLocal:
     case PlayerAction::KillAllEnemies:
@@ -209,6 +223,7 @@ constexpr PlayerActionPayloadKind playerActionPayloadKind(PlayerAction action) n
     case PlayerAction::ToggleCarHorn:
     case PlayerAction::DepositShipScrap:
     case PlayerAction::ToggleThirdPerson:
+    case PlayerAction::ToggleHearEveryone:
         return PlayerActionPayloadKind::None;
     }
     return PlayerActionPayloadKind::Invalid;
@@ -233,6 +248,8 @@ playerActionPayloadKind(const PlayerActionPayload& payload) noexcept {
         return PlayerActionPayloadKind::TerminalCredits;
     case 7:
         return PlayerActionPayloadKind::MoonTravel;
+    case 8:
+        return PlayerActionPayloadKind::HazardAtPlayer;
     default:
         return PlayerActionPayloadKind::Invalid;
     }
@@ -245,22 +262,28 @@ validatePlayerActionRequest(const PlayerActionRequest& request) noexcept {
         return PlayerActionValidation::UnsupportedAction;
     if (required != playerActionPayloadKind(request.payload))
         return PlayerActionValidation::PayloadMismatch;
-    constexpr std::uint8_t maximumSpawnCount = 20;
     if (const auto* payload = std::get_if<EnemySpawnPayload>(&request.payload);
         payload && (payload->enemyType.generation.value == 0 ||
                     static_cast<std::size_t>(payload->enemyType.index) >= kRuntimeCatalogCapacity ||
-                    payload->count == 0 || payload->count > maximumSpawnCount))
+                    payload->count == 0 || payload->count > kMaximumSpawnCount)) {
         return PlayerActionValidation::InvalidPayload;
+    }
     if (const auto* payload = std::get_if<EnemyAtPlayerPayload>(&request.payload);
         payload && (payload->enemyType.generation.value == 0 ||
                     static_cast<std::size_t>(payload->enemyType.index) >= kRuntimeCatalogCapacity ||
-                    payload->count == 0 || payload->count > maximumSpawnCount))
+                    payload->count == 0 || payload->count > kMaximumSpawnCount ||
+                    payload->distanceMeters > kMaximumSpawnDistanceMeters)) {
         return PlayerActionValidation::InvalidPayload;
+    }
     if (const auto* payload = std::get_if<ItemAtPlayerPayload>(&request.payload);
-        payload && (payload->itemType.generation.value == 0 ||
-                    static_cast<std::size_t>(payload->itemType.index) >= kRuntimeCatalogCapacity ||
-                    payload->count == 0 || payload->count > maximumSpawnCount))
+        payload &&
+        (payload->itemType.generation.value == 0 ||
+         static_cast<std::size_t>(payload->itemType.index) >= kRuntimeCatalogCapacity ||
+         payload->count == 0 || payload->count > kMaximumSpawnCount ||
+         (payload->fixedScrapValue && (*payload->fixedScrapValue < 0 ||
+                                       *payload->fixedScrapValue > kMaximumFixedScrapValue)))) {
         return PlayerActionValidation::InvalidPayload;
+    }
     if (const auto* payload = std::get_if<PlushieIntervalPayload>(&request.payload);
         payload && (payload->interval < std::chrono::milliseconds{0} ||
                     payload->interval > std::chrono::seconds{1}))
@@ -272,6 +295,14 @@ validatePlayerActionRequest(const PlayerActionRequest& request) noexcept {
         payload && (payload->moon.generation.value == 0 ||
                     static_cast<std::size_t>(payload->moon.index) >= kRuntimeCatalogCapacity))
         return PlayerActionValidation::InvalidPayload;
+    if (const auto* payload = std::get_if<HazardAtPlayerPayload>(&request.payload);
+        payload &&
+        (payload->hazardType.generation.value == 0 ||
+         static_cast<std::size_t>(payload->hazardType.index) >= kRuntimeCatalogCapacity ||
+         payload->count == 0 || payload->count > kMaximumSpawnCount ||
+         payload->distanceMeters > kMaximumSpawnDistanceMeters)) {
+        return PlayerActionValidation::InvalidPayload;
+    }
     return PlayerActionValidation::Valid;
 }
 
@@ -296,6 +327,10 @@ resolvePlayerActionCatalog(const PlayerActionRequest& request,
         index = lookup.entry.id.index;
     } else if (const auto* moonTravel = std::get_if<MoonTravelPayload>(&request.payload)) {
         const MoonCatalogLookup lookup = catalogs.moon(moonTravel->moon);
+        lookupResult = lookup.result;
+        index = lookup.entry.id.index;
+    } else if (const auto* hazard = std::get_if<HazardAtPlayerPayload>(&request.payload)) {
+        const HazardCatalogLookup lookup = catalogs.hazard(hazard->hazardType);
         lookupResult = lookup.result;
         index = lookup.entry.id.index;
     } else {

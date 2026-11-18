@@ -9,6 +9,7 @@ using UnityEngine;
 using UnityEngine.AI;
 using UnityEngine.Experimental.Rendering;
 using UnityEngine.InputSystem;
+using UnityEngine.InputSystem.Controls;
 using UnityEngine.Rendering;
 using UnityEngine.Rendering.HighDefinition;
 using UnityEngine.SceneManagement;
@@ -82,13 +83,124 @@ namespace Kue.Internal
         PriorReportFailed
     }
 
+    internal enum EnemyTraitsResult
+    {
+        Recorded,
+        NoCatalog,
+        StaleGeneration,
+        IndexOutOfRange
+    }
+
+    internal enum PlayerAction
+    {
+        None = 0,
+        TeleportTo,
+        Kill,
+        HealSelf,
+        KillAll,
+        KillAllExceptLocal,
+        LureAllEnemies,
+        TeleportAllEnemies,
+        TogglePersistentLure,
+        SpawnEnemy,
+        KillAllEnemies,
+        StunAllEnemies,
+        ToggleFly,
+        ToggleShipHorn,
+        ToggleShipLights,
+        ToggleFactoryLights,
+        BlowUpAllMines,
+        ToggleAllMines,
+        ToggleAllTurrets,
+        BerserkAllTurrets,
+        OpenShipDoorSpace,
+        ForceTentacleAttack,
+        SpawnMaskedEnemy,
+        EjectEveryone,
+        SpawnHoardingBugInfestation,
+        ToggleMineshaftElevator,
+        ToggleVehicleMagnet,
+        ShootAllShotguns,
+        ToggleShotgunSpam,
+        ExplodeCruiser,
+        SlideTaunt,
+        ExplodeAllJetpacks,
+        ToggleExplodeJetpacksOnGrab,
+        ForceBridgeFall,
+        ForceSmallBridgeFall,
+        ToggleTerminalSound,
+        ToggleDepositDeskSound,
+        ToggleCarHorn,
+        TogglePjManSpam,
+        SpawnEnemyAtPlayer,
+        SpawnItemAtPlayer,
+        TeleportItemsToPlayer,
+        SummonEnemyTypeAtPlayer,
+        ClearInsanity,
+        MaxInsanity,
+        DepositShipScrap,
+        AddTerminalCredits,
+        ToggleThirdPerson,
+        TravelToMoon,
+        ToggleHearEveryone,
+        SpawnHazardAtPlayer,
+    }
+
+    internal enum SessionSwitch
+    {
+        Fly,
+        ThirdPerson,
+        EmoteWhileMoving,
+        HearEveryone,
+        ShipHorn,
+        ShipLights,
+        TerminalSound,
+        ShipDoorButtons,
+        CruiserMagnet,
+        PlushieSpam,
+        CruiserHorn,
+        DeskDoorSound,
+        LandminesArmed,
+        TurretsActive,
+        FacilityPower,
+        ShotgunSpam,
+        JetpackTrap,
+    }
+
+    internal enum WorldFeature
+    {
+        Host,
+        ShipInOrbit,
+        MoonLoaded,
+        PlayersCanDie,
+        EnemiesAlive,
+        ShipHorn,
+        ShipLights,
+        Terminal,
+        Plushie,
+        Cruiser,
+        CompanyDesk,
+        Landmines,
+        Turrets,
+        FacilityPower,
+        MainBridge,
+        SmallBridge,
+        MineshaftElevator,
+        Shotguns,
+        Jetpacks,
+        HauntedMasks,
+        HoardingBugNest,
+        ShipDoor,
+        ModelPreviews,
+    }
+
     internal static class NativeBridge
     {
         [MethodImpl(MethodImplOptions.InternalCall)]
         internal static extern IntPtr RenderMenu(int screenWidth, int screenHeight, float mouseX,
                                                  float mouseY, int mouseDown, float wheel,
-                                                 out int x, out int y, out int width,
-                                                 out int height, out int byteCount,
+                                                 int pressedKey, out int x, out int y,
+                                                 out int width, out int height, out int byteCount,
                                                  out ulong pixelRevision);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
@@ -101,13 +213,24 @@ namespace Kue.Internal
                                                 out float a);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        internal static extern int PollAction(out int targetClientId);
+        internal static extern PlayerAction PollAction(out int clientId, out int catalogIndex,
+                                                       out int count, out int amount);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
         internal static extern void ResetRuntimeCatalogs();
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        internal static extern void ReportPersistentLureTarget(int targetClientId);
+        internal static extern void ReportSessionState(int switches, int world,
+                                                       long playersInFacility, int lureClientId,
+                                                       int lureSecondsLeft);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern EnemyTraitsResult ReportEnemySpawnTraits(int index, int outside,
+                                                                        int supported);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern int GetPreviewRequest(out int kind, out int catalogIndex, out int x,
+                                                     out int y, out int width, out int height);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
         internal static extern CatalogBeginResult BeginEnemyCatalog();
@@ -135,12 +258,6 @@ namespace Kue.Internal
         internal static extern void AbortActiveEnemyTypes();
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        internal static extern void ReportFlyState(int enabled);
-
-        [MethodImpl(MethodImplOptions.InternalCall)]
-        internal static extern void ReportHostState(int isHost);
-
-        [MethodImpl(MethodImplOptions.InternalCall)]
         internal static extern CatalogBeginResult BeginItemCatalog();
 
         [MethodImpl(MethodImplOptions.InternalCall)]
@@ -163,6 +280,18 @@ namespace Kue.Internal
 
         [MethodImpl(MethodImplOptions.InternalCall)]
         internal static extern void AbortMoonCatalog();
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern CatalogBeginResult BeginHazardCatalog();
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern CatalogReportResult ReportHazardType(int instanceId, string name);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern CatalogCommitResult CommitHazardCatalog();
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern void AbortHazardCatalog();
     }
 
     public static class HudBootstrap
@@ -304,7 +433,41 @@ namespace Kue.Internal
             }
         }
 
+        private sealed class PreviewPart
+        {
+            public Mesh mesh;
+            public bool ownsMesh;
+            public Matrix4x4 matrix;
+            public Material[] materials;
+        }
+
+        private sealed class HuntedEnemy
+        {
+            public EnemyAI enemy;
+            public float nextOwnershipRequest;
+            public float nextAggravation;
+            public float engagedAt;
+            public bool engaged;
+        }
+
         private const float MinimumLocalDeathRoundTime = 2f;
+        private const int LethalDamage = 1000;
+        private const int FullHealth = 100;
+        private const int MaximumSpawnCount = 20;
+        private const float MinimumEnemySpawnDistance = 2f;
+        private const float StunSeconds = 60f;
+        private const float LureSeconds = 30f;
+        private const float EngageDistance = 7f;
+        private const float RetakeDistance = 22f;
+        private const float HuntSpeed = 13f;
+        private const float HuntDoorSpeed = 8f;
+        private const float OwnershipRetrySeconds = 0.75f;
+        private const float AggravateRetrySeconds = 2f;
+        private const int PreviewKindEnemy = 0;
+        private const int PreviewKindItem = 1;
+        private const int PreviewKindTrap = 2;
+        private const float PreviewFieldOfView = 30f;
+        private const float PreviewSpinDegrees = 35f;
 
         private readonly List<Mark> marks = new List<Mark>();
         private readonly List<Vector2> projectedVertices = new List<Vector2>(1024);
@@ -376,16 +539,39 @@ namespace Kue.Internal
         private int tickIntervalMs = 100;
         private float nextPlayerFeatureWrite;
         private int configRevision = -1;
-        private int reportedHostState = -1;
         private float maxDistance = 1000f;
         private int lastGuiFrame = -1;
         private readonly Dictionary<ulong, bool> playerDeathState = new Dictionary<ulong, bool>();
-        private readonly HashSet<int> persistentOwnedEnemies = new HashSet<int>();
-        private readonly Dictionary<int, float> persistentActivatedEnemies =
-            new Dictionary<int, float>();
-        private readonly List<EnemyAI> persistentEnemies = new List<EnemyAI>();
-        private int persistentLureClientId = -1;
-        private float nextPersistentEnemyRefresh;
+        private readonly Dictionary<int, HuntedEnemy> hunted = new Dictionary<int, HuntedEnemy>();
+        private readonly List<HuntedEnemy> huntedOrder = new List<HuntedEnemy>();
+        private int lureClientId = -1;
+        private bool lureRelentless;
+        private float lureEndsAt;
+        private float nextLureScan;
+        private readonly List<GameObject> hazardCatalog = new List<GameObject>();
+        private readonly List<GameObject> hazardCatalogBuffer = new List<GameObject>();
+        private readonly List<string> hazardNameBuffer = new List<string>();
+        private bool hazardCatalogReady;
+        private int hazardCatalogSignature;
+        private int[] reportedEnemyTraits = new int[0];
+        private float nextEnemyTraitsRefresh;
+        private int livingEnemyCount;
+        private int scannedWorld;
+        private int scannedSwitches;
+        private long scannedPlayersInFacility;
+        private float nextWorldScan;
+        private bool hearEveryone;
+        private readonly List<PreviewPart> previewParts = new List<PreviewPart>();
+        private GameObject previewHolder;
+        private GameObject previewPrefab;
+        private RenderTexture previewTexture;
+        private CommandBuffer previewCommands;
+        private Material previewDepthMaterial;
+        private Shader previewTextureShader;
+        private Bounds previewBounds;
+        private Rect previewRect;
+        private bool previewVisible;
+        private bool previewUnavailable;
         private readonly List<EnemyType> enemyCatalog = new List<EnemyType>();
         private readonly List<Item> itemCatalog = new List<Item>();
         private readonly List<SelectableLevel> moonCatalog = new List<SelectableLevel>();
@@ -431,9 +617,6 @@ namespace Kue.Internal
         private bool carHornEnabled;
         private bool terminalSpamEnabled;
         private bool depositSpamEnabled;
-        private bool minesEnabled = true;
-        private bool turretsEnabled = true;
-        private bool turretsBerserk;
         private bool openShipDoorSpace;
         private bool shotgunSpamEnabled;
         private bool explodeJetpacksOnGrab;
@@ -445,13 +628,14 @@ namespace Kue.Internal
         private float nextFramePacingRefresh;
         private int capturedVSyncCount;
         private int capturedTargetFrameRate;
-        private static readonly MethodInfo KillPlayerServerRpcMethod =
+        private static readonly MethodInfo ThrowObjectServerRpcMethod =
             typeof(PlayerControllerB)
-                .GetMethod("KillPlayerServerRpc", BindingFlags.Instance | BindingFlags.NonPublic,
-                           null,
-                           new Type[] { typeof(int), typeof(bool), typeof(Vector3), typeof(int),
-                                        typeof(int), typeof(Vector3), typeof(bool) },
-                           null);
+                .GetMethod("ThrowObjectServerRpc", BindingFlags.Instance | BindingFlags.NonPublic);
+        private static readonly string[] HazardNameSuffixes = { "Hazard", "Container", "Type" };
+        private static readonly string[] HelperLayerNames = { "ScanNode", "MapRadar" };
+        private static readonly int GuiDepthTestId = Shader.PropertyToID("unity_GUIZTestMode");
+        private static readonly Color PreviewBackground = new Color(0.047f, 0.047f, 0.055f, 1f);
+        private static readonly Color PreviewUntexturedColor = new Color(0.32f, 0.32f, 0.35f, 1f);
         private static readonly Color[] ItemTierColors = {
             new Color(0.38f, 0.42f, 0.47f, 0.24f), new Color(0.5f, 0.5f, 0.5f, 0.24f),
             new Color(10f / 255f, 187f / 255f, 10f / 255f, 0.24f), new Color(1f, 0f, 1f, 0.24f),
@@ -467,9 +651,6 @@ namespace Kue.Internal
         private static readonly Dictionary<string, ObjectCacheEntry> GameObjectCache =
             new Dictionary<string, ObjectCacheEntry>();
         private static readonly UnityEngine.Object[] NoObjects = new UnityEngine.Object[0];
-        private static readonly object[] KillRpcArguments = {
-            0, true, Vector3.zero, (int)CauseOfDeath.Bludgeoning, 0, Vector3.zero, false
-        };
         [ThreadStatic]
         private static object[] oneArgument;
         [ThreadStatic]
@@ -507,6 +688,8 @@ namespace Kue.Internal
             RestoreThirdPersonCamera();
             SetThirdPerson(false);
             RestoreFlapBones();
+            if (hearEveryone)
+                SetHearEveryone(false);
             ReleaseActiveInputState();
         }
 
@@ -534,6 +717,11 @@ namespace Kue.Internal
             if (highlightQuad != null)
                 Destroy(highlightQuad);
             ReleaseHighlightBuffers();
+            ReleasePreview();
+            if (previewDepthMaterial != null)
+                Destroy(previewDepthMaterial);
+            if (previewCommands != null)
+                previewCommands.Release();
             QualitySettings.vSyncCount = capturedVSyncCount;
             Application.targetFrameRate = capturedTargetFrameRate;
         }
@@ -561,7 +749,11 @@ namespace Kue.Internal
             {
                 menuOpen = !menuOpen;
                 if (menuOpen)
+                {
+                    nextWorldScan = 0f;
+                    nextEnemyTraitsRefresh = 0f;
                     CaptureMenu();
+                }
                 else
                     ReleaseMenu();
             }
@@ -583,13 +775,6 @@ namespace Kue.Internal
                     Application.targetFrameRate = -1;
             }
 
-            PlayerControllerB localPlayer = LocalPlayer();
-            int hostState = localPlayer != null && localPlayer.IsHost ? 1 : 0;
-            if (hostState != reportedHostState)
-            {
-                reportedHostState = hostState;
-                NativeBridge.ReportHostState(hostState);
-            }
             if (revision != configRevision)
             {
                 configRevision = revision;
@@ -600,6 +785,8 @@ namespace Kue.Internal
             RefreshEnemyCatalog();
             RefreshItemCatalog();
             RefreshMoonCatalog();
+            RefreshHazardCatalog();
+            RefreshEnemyTraits();
             ProcessPendingLocalKill();
             ProcessManagedActions();
             UpdatePlayerUtilities();
@@ -611,12 +798,15 @@ namespace Kue.Internal
                 nextScan = Time.unscaledTime + 0.5f;
                 RebuildMarks();
             }
+            ReportSession();
         }
 
         private void LateUpdate()
         {
             ApplyLocalPlayerFeatures();
-            UpdatePersistentLure();
+            UpdateLure();
+            UpdateHearEveryone();
+            UpdatePreview();
             UpdateFlappingArms();
             UpdateThirdPersonModel();
             CollectHighlightDraws();
@@ -820,6 +1010,7 @@ namespace Kue.Internal
                 return;
             Vector3 origin = local != null ? local.transform.position : camera.transform.position;
             float maximumDistanceSquared = maxDistance * maxDistance;
+            int visibleLayers = PlayerVisibleLayers(camera);
             for (int markIndex = 0; markIndex < markCount; markIndex++)
             {
                 Mark mark = marks[markIndex];
@@ -838,8 +1029,7 @@ namespace Kue.Internal
                 for (int i = 0; i < mark.renderers.Length && i < rendererLimit; i++)
                 {
                     Renderer renderer = mark.renderers[i];
-                    if (renderer == null || !renderer.enabled ||
-                        (!(renderer is MeshRenderer) && !(renderer is SkinnedMeshRenderer)))
+                    if (!ModelRenderer(renderer, visibleLayers))
                     {
                         if (mark.kind == MarkKind.Player)
                             rendererLimit++;
@@ -930,9 +1120,9 @@ namespace Kue.Internal
             float wheel = mouse != null ? mouse.scroll.ReadValue().y / 120f : 0f;
             int x, y, width, height, bytes;
             ulong pixelRevision;
-            IntPtr pixels =
-                NativeBridge.RenderMenu(Screen.width, Screen.height, mx, my, down, wheel, out x,
-                                        out y, out width, out height, out bytes, out pixelRevision);
+            IntPtr pixels = NativeBridge.RenderMenu(Screen.width, Screen.height, mx, my, down,
+                                                    wheel, PressedKey(), out x, out y, out width,
+                                                    out height, out bytes, out pixelRevision);
             if (pixels == IntPtr.Zero || width <= 0 || height <= 0 || bytes == 0)
                 return;
             long expectedBytes = (long)width * height * 4L;
@@ -967,6 +1157,17 @@ namespace Kue.Internal
             menuTexture.LoadRawTextureData(pixels, (int)suppliedBytes);
             menuTexture.Apply(false, false);
             uploadedMenuPixelRevision = pixelRevision;
+        }
+
+        private static int PressedKey()
+        {
+            Keyboard keyboard = Keyboard.current;
+            if (keyboard == null || !keyboard.anyKey.wasPressedThisFrame)
+                return 0;
+            foreach (KeyControl key in keyboard.allKeys)
+                if (key != null && key.wasPressedThisFrame)
+                    return (int)key.keyCode;
+            return 0;
         }
 
         private void CaptureMenu()
@@ -1115,13 +1316,19 @@ namespace Kue.Internal
                 QueueLocalKill(local);
                 return;
             }
-
-            if (KillPlayerServerRpcMethod == null)
-                throw new MissingMethodException("PlayerControllerB.KillPlayerServerRpc");
-            KillRpcArguments[0] = (int)player.playerClientId;
-            KillPlayerServerRpcMethod.Invoke(local, KillRpcArguments);
-            Debug.Log("[Kue] Remote KillPlayerServerRpc sent for " + player.playerUsername + " (" +
+            player.DamagePlayerFromOtherClientServerRpc(LethalDamage, Vector3.zero,
+                                                        (int)local.playerClientId);
+            StartCoroutine(ConfirmRemoteKill(player));
+            Debug.Log("[Kue] Lethal damage sent to " + player.playerUsername + " (" +
                       player.playerClientId + ")");
+        }
+
+        private IEnumerator ConfirmRemoteKill(PlayerControllerB player)
+        {
+            yield return new WaitForSeconds(1.5f);
+            if (player != null && !player.isPlayerDead && player.isPlayerControlled)
+                ReportActionFailure(player.playerUsername +
+                                    " survived: the game blocks damage in orbit");
         }
 
         private void QueueLocalKill(PlayerControllerB local)
@@ -1140,245 +1347,304 @@ namespace Kue.Internal
         private static void ReportActionFailure(string message)
         {
             Debug.LogError("[Kue] " + message);
+            ShowTip(message);
+        }
+
+        private static void ShowTip(string message)
+        {
             HUDManager hud = HUDManager.Instance;
             if (hud != null)
-                hud.DisplayTip("Kue", message);
+                hud.DisplayTip("Solar", message);
         }
 
-        private int LureEnemiesManaged(PlayerControllerB player, bool refreshOwnership)
+        private void TeleportToPlayerManaged(PlayerControllerB target)
         {
             PlayerControllerB local = LocalPlayer();
-            if (!RealPlayer(player) || local == null)
-                return 0;
-            EnemyAI[] loadedEnemies = UnityEngine.Object.FindObjectsOfType<EnemyAI>();
-            List<EnemyAI> enemies = new List<EnemyAI>(loadedEnemies.Length);
-            int count = 0;
-            foreach (EnemyAI enemy in loadedEnemies)
+            if (target == null || local == null || target == local)
             {
-                if (enemy == null || enemy.isEnemyDead)
-                    continue;
-                try
-                {
-                    int instanceId = enemy.GetInstanceID();
-                    if (refreshOwnership && persistentOwnedEnemies.Add(instanceId))
-                        enemy.ChangeEnemyOwnerServerRpc(local.actualClientId);
-                    enemies.Add(enemy);
-                    count++;
-                }
-                catch (Exception e)
-                {
-                    Debug.LogError("[Kue] Enemy lure failed for " + enemy.name + ": " + e);
-                }
-            }
-            StartCoroutine(ApplyLureAfterOwnership(enemies, player, 90));
-            return count;
-        }
-
-        private static bool EnemyOwnedBy(EnemyAI enemy, PlayerControllerB local)
-        {
-            return enemy != null && local != null && enemy.thisNetworkObject != null &&
-                   enemy.thisNetworkObject.OwnerClientId == local.actualClientId;
-        }
-
-        private void ForceEnemyTarget(EnemyAI enemy, PlayerControllerB target,
-                                      bool refreshNetworkState, bool noise = false)
-        {
-            if (enemy == null || target == null || enemy.isEnemyDead)
+                ReportActionFailure("Teleport failed: target unavailable");
                 return;
-            enemy.targetPlayer = target;
-            enemy.SetMovingTowardsTargetPlayer(target);
-            enemy.destination = SnapToNavMesh(target.transform.position);
-            enemy.moveTowardsDestination = true;
-            if (noise)
-            {
-                try
-                {
-                    enemy.DetectNoise(target.transform.position, 1f, 0, 0);
-                }
-                catch (Exception e)
-                {
-                    Debug.LogError("[Kue] Lure noise failed for " + enemy.name + ": " + e);
-                }
             }
-            if (!refreshNetworkState)
+            if (local.isPlayerDead)
+            {
+                ReportActionFailure("Teleport failed: you are dead");
                 return;
-
-            string type = enemy.GetType().Name;
-            int chase = 1;
-            int aggravated = 2;
-
-            if (type == "CrawlerAI")
-                InvokeAny(enemy, "BeginChasingPlayerServerRpc", (int)target.playerClientId);
-            else if (type == "MouthDogAI")
-                InvokeAny(enemy, "ReactToOtherDogHowl", TargetPosition(target));
-            else if (type == "BaboonBirdAI")
-                InvokeAny(enemy, "SetAggressiveModeServerRpc", 1);
-            else if (type == "ForestGiantAI")
-            {
-                InvokeAny(enemy, "SwitchToBehaviourServerRpc", chase);
-                SetMember(enemy, "chasingPlayer", target);
-                SetMember(enemy, "investigating", true);
-                SetMember(enemy, "lostPlayerInChase", false);
-                InvokeAny(enemy, "SetDestinationToPosition", TargetPosition(target), false);
             }
-            else if (type == "FlowermanAI")
-            {
-                InvokeAny(enemy, "SwitchToBehaviourServerRpc", aggravated);
-                InvokeAny(enemy, "EnterAngerModeServerRpc", 20);
-            }
-            else if (type == "HoarderBugAI")
-            {
-                InvokeAny(enemy, "SwitchToBehaviourServerRpc", aggravated);
-                SetMember(enemy, "angryAtPlayer", target);
-                SetMember(enemy, "angryTimer", float.MaxValue);
-                SetMember(enemy, "lostPlayerInChase", false);
-                InvokeAny(enemy, "SyncNestPositionServerRpc", TargetPosition(target));
-            }
-            else if (type == "NutcrackerEnemyAI")
-            {
-                InvokeAny(enemy, "SwitchToBehaviourServerRpc", aggravated);
-                SetMember(enemy, "lastSeenPlayerPos", TargetPosition(target));
-                SetMember(enemy, "timeSinceSeeingTarget", 0f);
-            }
-            else if (type == "BushWolfEnemy")
-            {
-                SetMember(enemy, "isHiding", false);
-                SetMember(enemy, "staringAtPlayer", target);
-                InvokeAny(enemy, "SwitchToBehaviourServerRpc", chase);
-            }
-            else if (type == "DressGirlAI")
-            {
-                SetMember(enemy, "hauntingPlayer", target);
-                InvokeAny(enemy, "SwitchToBehaviourServerRpc", chase);
-            }
-            else if (type == "ButlerEnemyAI")
-                InvokeAny(enemy, "SwitchToBehaviourServerRpc", aggravated);
-            else if (type == "RadMechAI")
-            {
-                InvokeAny(enemy, "SetChargingForwardClientRpc", true);
-                InvokeAny(enemy, "SwitchToBehaviourServerRpc", chase);
-            }
-            else if (type == "CentipedeAI" || type == "SandSpiderAI" || type == "RedLocustBees" ||
-                     type == "PufferAI" || type == "JesterAI")
-                InvokeAny(enemy, "SwitchToBehaviourServerRpc", aggravated);
-            else
-                InvokeAny(enemy, "SwitchToBehaviourServerRpc", chase);
+            Vector3 position = TargetPosition(target);
+            local.isInElevator = target.isInElevator;
+            local.isInHangarShipRoom = target.isInHangarShipRoom;
+            local.isInsideFactory = target.isInsideFactory;
+            local.TeleportPlayer(position, false, 0f, false, !flyEnabled);
+            Debug.Log("[Kue] Teleported to " + target.playerUsername + " at " + position);
         }
 
-        private IEnumerator ApplyLureAfterOwnership(List<EnemyAI> enemies, PlayerControllerB target,
-                                                    int frames)
+        private void HealSelfManaged()
         {
             PlayerControllerB local = LocalPlayer();
-            if (local == null || target == null)
-                yield break;
-            HashSet<int> activated = new HashSet<int>();
-            for (int frame = 0; frame < frames; frame++)
+            if (local == null || local.isPlayerDead)
             {
-                foreach (EnemyAI enemy in enemies)
-                {
-                    if (enemy == null || enemy.isEnemyDead)
-                        continue;
-                    int id = enemy.GetInstanceID();
-                    bool owned = EnemyOwnedBy(enemy, local);
-                    if (!owned && frame % 15 == 0)
-                    {
-                        try
-                        {
-                            enemy.ChangeEnemyOwnerServerRpc(local.actualClientId);
-                        }
-                        catch (Exception e)
-                        {
-                            Debug.LogError("[Kue] Lure ownership retry failed: " + e);
-                        }
-                    }
-                    if (owned)
-                    {
-                        ForceEnemyTarget(enemy, target, activated.Add(id));
-                    }
-                }
-                yield return null;
+                ReportActionFailure("Heal failed: you are not alive");
+                return;
             }
-            Debug.Log("[Kue] Lure activated " + activated.Count + "/" + enemies.Count +
-                      " enemies for " + target.playerUsername + " as host=" + local.IsHost);
+            local.health = FullHealth;
+            local.MakeCriticallyInjured(false);
             if (HUDManager.Instance != null)
-                HUDManager.Instance.DisplayTip("Kue", "Lured " + activated.Count + " enemies to " +
-                                                          target.playerUsername);
+                HUDManager.Instance.UpdateHealthUI(FullHealth, false);
+            Debug.Log("[Kue] Healed the local player");
         }
 
-        private void UpdatePersistentLure()
+        private static bool EnemyOwnedBy(EnemyAI enemy, ulong clientId)
         {
-            if (persistentLureClientId < 0)
-                return;
-            PlayerControllerB local = LocalPlayer();
-            PlayerControllerB target = PlayerByClientId(persistentLureClientId);
-            if (local == null || target == null)
+            return enemy != null && enemy.thisNetworkObject != null &&
+                   enemy.thisNetworkObject.OwnerClientId == clientId;
+        }
+
+        private static bool SharesArea(EnemyAI enemy, PlayerControllerB player)
+        {
+            return enemy.isOutside != player.isInsideFactory;
+        }
+
+        private static int ChaseState(EnemyAI enemy)
+        {
+            switch (enemy.GetType().Name)
             {
-                persistentLureClientId = -1;
-                persistentOwnedEnemies.Clear();
-                persistentActivatedEnemies.Clear();
-                persistentEnemies.Clear();
-                NativeBridge.ReportPersistentLureTarget(-1);
+            case "SpringManAI":
+            case "MaskedPlayerEnemy":
+            case "ForestGiantAI":
+            case "RadMechAI":
+                return 1;
+            case "FlowermanAI":
+            case "JesterAI":
+            case "HoarderBugAI":
+            case "SandSpiderAI":
+            case "CentipedeAI":
+            case "ButlerEnemyAI":
+            case "MouthDogAI":
+                return 2;
+            default:
+                return -1;
+            }
+        }
+
+        private static void AggravateEnemy(EnemyAI enemy, PlayerControllerB target, bool owned)
+        {
+            string type = enemy.GetType().Name;
+            int targetId = (int)target.playerClientId;
+            if (type == "CrawlerAI")
+            {
+                if (enemy.currentBehaviourStateIndex != 1)
+                    InvokeAny(enemy, "BeginChasingPlayerServerRpc", targetId);
                 return;
             }
-            if (target.isPlayerDead)
-                return;
-            bool noise = Time.unscaledTime >= nextLureNoise;
-            if (noise)
-                nextLureNoise = Time.unscaledTime + 0.5f;
-
-            if (Time.unscaledTime >= nextPersistentEnemyRefresh)
+            if (type == "NutcrackerEnemyAI")
             {
-                nextPersistentEnemyRefresh = Time.unscaledTime + 0.25f;
-                persistentEnemies.Clear();
-                foreach (UnityEngine.Object loaded in FindAll("EnemyAI"))
+                if (enemy.currentBehaviourStateIndex != 2)
+                    InvokeAny(enemy, "SeeMovingThreatServerRpc", targetId, true);
+                return;
+            }
+            if (owned && type == "BaboonBirdAI")
+                InvokeAny(enemy, "SetAggressiveModeServerRpc", 1);
+            if (owned && type == "MouthDogAI")
+                InvokeAny(enemy, "ReactToOtherDogHowl", target.transform.position);
+            int state = ChaseState(enemy);
+            if (state < 0 || enemy.enemyBehaviourStates == null ||
+                state >= enemy.enemyBehaviourStates.Length ||
+                enemy.currentBehaviourStateIndex == state)
+                return;
+            if (owned)
+                enemy.SwitchToBehaviourState(state);
+            else
+                enemy.SwitchToBehaviourServerRpc(state);
+            if (owned && type == "FlowermanAI")
+                InvokeAny(enemy, "EnterAngerModeServerRpc", 20f);
+        }
+
+        private static void SteerEnemy(EnemyAI enemy, Vector3 goal, float distance, bool hunting)
+        {
+            NavMeshAgent agent = enemy.agent;
+            if (agent == null || !agent.enabled || !agent.isOnNavMesh || enemy.inSpecialAnimation ||
+                enemy.stunNormalizedTimer > 0f)
+                return;
+            enemy.destination = goal;
+            enemy.moveTowardsDestination = true;
+            if ((agent.destination - goal).sqrMagnitude > 1f)
+                agent.SetDestination(goal);
+            if (!hunting || agent.speed <= 0.1f || distance <= EngageDistance)
+                return;
+            Vector3 heading = agent.desiredVelocity;
+            heading.y = 0f;
+            float extraSpeed = HuntSpeed - agent.speed;
+            if (heading.sqrMagnitude < 0.01f || extraSpeed <= 0f)
+                return;
+            agent.Move(heading.normalized * (extraSpeed * Time.deltaTime));
+        }
+
+        private void ToggleLure(int clientId, bool relentless)
+        {
+            if (lureClientId == clientId && lureRelentless == relentless)
+            {
+                StopLure();
+                ShowTip(relentless ? "Persistent targeting off" : "Lure stopped");
+                return;
+            }
+            PlayerControllerB target = PlayerByClientId(clientId);
+            if (!RealPlayer(target) || target.isPlayerDead)
+            {
+                ReportActionFailure("Lure failed: that player is not alive");
+                return;
+            }
+            StopLure();
+            lureClientId = clientId;
+            lureRelentless = relentless;
+            lureEndsAt = relentless ? float.PositiveInfinity : Time.unscaledTime + LureSeconds;
+            nextLureScan = 0f;
+            nextLureNoise = 0f;
+            Debug.Log("[Kue] " + (relentless ? "Persistent targeting" : "Timed lure") + " on " +
+                      target.playerUsername + " (" + clientId + ")");
+            ShowTip(relentless ? "Enemies now hunt " + target.playerUsername
+                               : "Luring enemies to " + target.playerUsername + " for 30 s");
+        }
+
+        private void StopLure()
+        {
+            lureClientId = -1;
+            hunted.Clear();
+            huntedOrder.Clear();
+        }
+
+        private void RefreshHunted(PlayerControllerB target)
+        {
+            huntedOrder.Clear();
+            foreach (UnityEngine.Object loaded in FindAll("EnemyAI"))
+            {
+                EnemyAI enemy = loaded as EnemyAI;
+                if (enemy == null || enemy.isEnemyDead || enemy.agent == null ||
+                    enemy is DressGirlAI || !SharesArea(enemy, target))
+                    continue;
+                int instanceId = enemy.GetInstanceID();
+                HuntedEnemy entry;
+                if (!hunted.TryGetValue(instanceId, out entry))
                 {
-                    EnemyAI enemy = loaded as EnemyAI;
-                    if (enemy == null || enemy.isEnemyDead)
-                        continue;
-                    persistentEnemies.Add(enemy);
-                    int instanceId = enemy.GetInstanceID();
-                    if (persistentOwnedEnemies.Add(instanceId))
+                    entry = new HuntedEnemy { enemy = enemy };
+                    hunted[instanceId] = entry;
+                }
+                huntedOrder.Add(entry);
+            }
+            if (hunted.Count == huntedOrder.Count)
+                return;
+            hunted.Clear();
+            foreach (HuntedEnemy entry in huntedOrder)
+                hunted[entry.enemy.GetInstanceID()] = entry;
+        }
+
+        private void DriveHunted(HuntedEnemy entry, PlayerControllerB target,
+                                 PlayerControllerB local, Vector3 goal, bool noise)
+        {
+            EnemyAI enemy = entry.enemy;
+            if (enemy == null || enemy.isEnemyDead)
+                return;
+            float now = Time.unscaledTime;
+            float distance = Vector3.Distance(enemy.transform.position, target.transform.position);
+            bool mine = EnemyOwnedBy(enemy, local.actualClientId);
+            bool selfTarget = target == local;
+            if (entry.engaged)
+            {
+                bool settled = now - entry.engagedAt > 1f;
+                bool lost = distance > RetakeDistance ||
+                            (settled && !EnemyOwnedBy(enemy, target.actualClientId));
+                if (!lost)
+                {
+                    if (lureRelentless && now >= entry.nextAggravation)
                     {
-                        try
-                        {
-                            enemy.ChangeEnemyOwnerServerRpc(local.actualClientId);
-                        }
-                        catch (Exception e)
-                        {
-                            Debug.LogError("[Kue] Enemy ownership transfer failed: " + e);
-                        }
+                        entry.nextAggravation = now + AggravateRetrySeconds;
+                        AggravateEnemy(enemy, target, false);
                     }
-                    else if (!EnemyOwnedBy(enemy, local))
-                    {
-                        persistentActivatedEnemies.Remove(instanceId);
-                        try
-                        {
-                            enemy.ChangeEnemyOwnerServerRpc(local.actualClientId);
-                        }
-                        catch (Exception e)
-                        {
-                            Debug.LogError("[Kue] Persistent ownership refresh failed: " + e);
-                        }
-                    }
-                    if (EnemyOwnedBy(enemy, local))
-                    {
-                        float activatedAt;
-                        bool refresh =
-                            !persistentActivatedEnemies.TryGetValue(instanceId, out activatedAt) ||
-                            Time.unscaledTime - activatedAt >= 1.5f;
-                        if (refresh)
-                            persistentActivatedEnemies[instanceId] = Time.unscaledTime;
-                        ForceEnemyTarget(enemy, target, refresh, noise);
-                    }
+                    return;
+                }
+                entry.engaged = false;
+            }
+            if (!mine && !selfTarget && distance <= RetakeDistance &&
+                EnemyOwnedBy(enemy, target.actualClientId))
+            {
+                entry.engaged = true;
+                entry.engagedAt = now;
+                entry.nextAggravation = now;
+                return;
+            }
+            if (!mine)
+            {
+                if (now >= entry.nextOwnershipRequest)
+                {
+                    entry.nextOwnershipRequest = now + OwnershipRetrySeconds;
+                    enemy.ChangeEnemyOwnerServerRpc(local.actualClientId);
                 }
                 return;
             }
-            foreach (EnemyAI enemy in persistentEnemies)
+            if (!selfTarget && distance <= EngageDistance)
             {
-                if (enemy == null || enemy.isEnemyDead)
-                    continue;
-                if (EnemyOwnedBy(enemy, local))
-                    ForceEnemyTarget(enemy, target, false, noise);
+                if (lureRelentless)
+                    AggravateEnemy(enemy, target, true);
+                enemy.ChangeEnemyOwnerServerRpc(target.actualClientId);
+                entry.engaged = true;
+                entry.engagedAt = now;
+                entry.nextAggravation = now + AggravateRetrySeconds;
+                return;
+            }
+            if (selfTarget && !lureRelentless && distance <= EngageDistance)
+                return;
+            if (selfTarget && lureRelentless)
+            {
+                enemy.targetPlayer = local;
+                if (now >= entry.nextAggravation)
+                {
+                    entry.nextAggravation = now + AggravateRetrySeconds;
+                    AggravateEnemy(enemy, local, true);
+                }
+            }
+            if (lureRelentless && local.IsHost && enemy.openDoorSpeedMultiplier < HuntDoorSpeed)
+                enemy.openDoorSpeedMultiplier = HuntDoorSpeed;
+            SteerEnemy(enemy, goal, distance, lureRelentless);
+            if (noise)
+                enemy.DetectNoise(target.transform.position, 1f, 0, 0);
+        }
+
+        private void UpdateLure()
+        {
+            if (lureClientId < 0)
+                return;
+            PlayerControllerB local = LocalPlayer();
+            PlayerControllerB target = PlayerByClientId(lureClientId);
+            if (local == null || target == null || Time.unscaledTime >= lureEndsAt)
+            {
+                StopLure();
+                return;
+            }
+            if (target.isPlayerDead || !target.isPlayerControlled)
+            {
+                if (!lureRelentless)
+                    StopLure();
+                return;
+            }
+            float now = Time.unscaledTime;
+            if (now >= nextLureScan)
+            {
+                nextLureScan = now + 0.25f;
+                RefreshHunted(target);
+            }
+            bool noise = now >= nextLureNoise;
+            if (noise)
+                nextLureNoise = now + 0.5f;
+            Vector3 goal = SnapToNavMesh(target.transform.position);
+            for (int i = 0; i < huntedOrder.Count; i++)
+            {
+                try
+                {
+                    DriveHunted(huntedOrder[i], target, local, goal, noise);
+                }
+                catch (Exception e)
+                {
+                    Debug.LogError("[Kue] Lure step failed: " + e);
+                }
             }
         }
 
@@ -1511,6 +1777,8 @@ namespace Kue.Internal
                 enemyCatalogNames[enemyCatalog[i].enemyName] = i;
             }
             activeEnemyCounts = new int[enemyCatalog.Count];
+            reportedEnemyTraits = new int[0];
+            nextEnemyTraitsRefresh = 0f;
             enemyCatalogReady = true;
             Debug.Log("[Kue] Runtime enemy catalog: " + enemyCatalog.Count + " installed types");
         }
@@ -1541,6 +1809,14 @@ namespace Kue.Internal
             {
                 moonCatalogReady = false;
                 Debug.Log("[Kue] Moons changed; rescanning the catalog");
+            }
+            if (hazardCatalogReady &&
+                Resources.FindObjectsOfTypeAll<IndoorMapHazardType>().Length * 65536 +
+                        Resources.FindObjectsOfTypeAll<SpawnableOutsideObject>().Length !=
+                    hazardCatalogSignature)
+            {
+                hazardCatalogReady = false;
+                Debug.Log("[Kue] Traps changed; rescanning the catalog");
             }
         }
 
@@ -1743,7 +2019,7 @@ namespace Kue.Internal
             round.ChangeLevelServerRpc(levelIndex, terminal.groupCredits);
             Debug.Log("[Kue] Routing the ship to " + name + " (level " + levelIndex + ")" + detail);
             if (HUDManager.Instance != null)
-                HUDManager.Instance.DisplayTip("Kue", "Routing to " + name + detail);
+                HUDManager.Instance.DisplayTip("Solar", "Routing to " + name + detail);
         }
 
         private static int ItemCatalogSignature(StartOfRound round, int loadedCount)
@@ -1768,9 +2044,13 @@ namespace Kue.Internal
             enemyCatalogReady = false;
             itemCatalogReady = false;
             moonCatalogReady = false;
+            hazardCatalogReady = false;
             enemyCatalog.Clear();
             itemCatalog.Clear();
             moonCatalog.Clear();
+            hazardCatalog.Clear();
+            reportedEnemyTraits = new int[0];
+            StopLure();
             moonLevelIndices.Clear();
             moonHasScene.Clear();
             swappedLevelSlot = -1;
@@ -1927,79 +2207,127 @@ namespace Kue.Internal
             hud.itemSlotIconFrames = frames;
         }
 
-        private void SpawnEnemyManaged(int packed)
+        private struct MapNodes
         {
-            int index = packed & 0xffff;
-            int count = Mathf.Clamp((packed >> 16) & 0xff, 1, 20);
-            bool outside = (packed & (1 << 30)) != 0;
-            PlayerControllerB local = LocalPlayer();
-            if (index < 0 || index >= enemyCatalog.Count || RoundManager.Instance == null ||
-                StartOfRound.Instance == null || local == null)
-            {
-                ReportActionFailure("Enemy spawn failed: session or type unavailable");
-                return;
-            }
-            if (!local.IsHost)
-            {
-                ReportActionFailure("Networked enemy spawning requires host");
-                return;
-            }
-            EnemyType type = enemyCatalog[index];
-            bool spawnOutside = type.isOutsideEnemy || type.isDaytimeEnemy;
-            List<GameObject> nodes = LiveNodes(spawnOutside);
-            if (nodes.Count == 0)
-            {
-                spawnOutside = !spawnOutside;
-                nodes = LiveNodes(spawnOutside);
-            }
-            if (nodes.Count == 0)
-            {
-                ReportActionFailure(
-                    "Enemy spawn failed: no navigation nodes, land on a moon first");
-                return;
-            }
-            StartOfRound.Instance.currentLevel.maxEnemyPowerCount = int.MaxValue;
-            List<EnemyAI> spawned = new List<EnemyAI>();
-            for (int i = 0; i < count; i++)
-            {
-                Vector3 position =
-                    nodes[UnityEngine.Random.Range(0, nodes.Count)].transform.position;
-                if (string.Equals(type.enemyName, "Bush Wolf", StringComparison.OrdinalIgnoreCase))
-                    StartCoroutine(SpawnBushWolfManaged());
-                else
-                {
-                    SpawnNestForEnemy(type, position);
-                    NetworkObjectReference reference =
-                        RoundManager.Instance.SpawnEnemyGameObject(position, 0f, -1, type);
-                    NetworkObject networkObject;
-                    if (reference.TryGet(out networkObject) && networkObject != null)
-                    {
-                        EnemyAI enemy = networkObject.GetComponentInParent<EnemyAI>();
-                        if (enemy != null)
-                            spawned.Add(enemy);
-                    }
-                }
-            }
-            if (spawned.Count > 0)
-                StartCoroutine(ApplyHabitatAfterStart(spawned, spawnOutside));
-            string area = spawnOutside ? " outside" : " inside";
-            Debug.Log("[Kue] Spawned " + count + " x " + type.enemyName + area +
-                      (spawnOutside != outside ? " (enemy habitat)" : ""));
-            if (HUDManager.Instance != null)
-                HUDManager.Instance.DisplayTip("Kue", "Spawned " + count + " " + type.enemyName +
-                                                          area);
+            public int facility;
+            public int dry;
+            public int water;
+            public int outside;
+            public bool weeds;
         }
 
-        private static List<GameObject> LiveNodes(bool outside)
+        private static int LiveNodeCount(GameObject[] nodes)
+        {
+            int live = 0;
+            if (nodes != null)
+                foreach (GameObject node in nodes)
+                    if (node != null)
+                        live++;
+            return live;
+        }
+
+        private static List<GameObject> LiveNodes(GameObject[] nodes)
         {
             List<GameObject> live = new List<GameObject>();
-            GameObject[] nodes = outside ? RoundManager.Instance.outsideAINodes
-                                         : RoundManager.Instance.insideAINodes;
             if (nodes != null)
                 foreach (GameObject node in nodes)
                     if (node != null)
                         live.Add(node);
             return live;
+        }
+
+        private static GameObject[] HabitatNodes(EnemyType type)
+        {
+            RoundManager manager = RoundManager.Instance;
+            if (!type.isOutsideEnemy)
+                return manager.insideAINodes;
+            manager.GetOutsideAINodes(true);
+            switch (type.WaterType)
+            {
+            case EnemyWaterType.LandOnly:
+                return manager.outsideAIDryNodesUnordered;
+            case EnemyWaterType.WaterOnly:
+                return manager.outsideAIWaterNodesUnordered;
+            default:
+                return manager.outsideAINodesUnordered;
+            }
+        }
+
+        private static bool WeedsGrowing()
+        {
+            MoldSpreadManager mold = UnityEngine.Object.FindObjectOfType<MoldSpreadManager>();
+            if (mold == null || mold.generatedMold == null)
+                return false;
+            foreach (GameObject weed in mold.generatedMold)
+                if (weed != null && weed.activeSelf)
+                    return true;
+            return false;
+        }
+
+        private static MapNodes CountMapNodes()
+        {
+            MapNodes nodes = new MapNodes();
+            RoundManager manager = RoundManager.Instance;
+            StartOfRound round = StartOfRound.Instance;
+            if (manager == null || round == null || round.inShipPhase)
+                return nodes;
+            manager.GetOutsideAINodes(true);
+            nodes.facility = LiveNodeCount(manager.insideAINodes);
+            nodes.dry = LiveNodeCount(manager.outsideAIDryNodesUnordered);
+            nodes.water = LiveNodeCount(manager.outsideAIWaterNodesUnordered);
+            nodes.outside = LiveNodeCount(manager.outsideAINodesUnordered);
+            nodes.weeds = WeedsGrowing();
+            return nodes;
+        }
+
+        private static bool EnemyWorksOnMap(EnemyType type, MapNodes nodes)
+        {
+            if (type.spawnFromWeeds && !nodes.weeds)
+                return false;
+            if (!type.isOutsideEnemy)
+                return nodes.facility > 0;
+            switch (type.WaterType)
+            {
+            case EnemyWaterType.LandOnly:
+                return nodes.dry > 0;
+            case EnemyWaterType.WaterOnly:
+                return nodes.water > 0;
+            default:
+                return nodes.outside > 0;
+            }
+        }
+
+        private void RefreshEnemyTraits()
+        {
+            if (!enemyCatalogReady || !menuOpen || Time.unscaledTime < nextEnemyTraitsRefresh)
+                return;
+            nextEnemyTraitsRefresh = Time.unscaledTime + 1f;
+            if (reportedEnemyTraits.Length != enemyCatalog.Count)
+            {
+                reportedEnemyTraits = new int[enemyCatalog.Count];
+                for (int i = 0; i < reportedEnemyTraits.Length; i++)
+                    reportedEnemyTraits[i] = -1;
+            }
+            MapNodes nodes = CountMapNodes();
+            for (int i = 0; i < enemyCatalog.Count; i++)
+            {
+                EnemyType type = enemyCatalog[i];
+                if (type == null)
+                    continue;
+                int outside = type.isOutsideEnemy ? 1 : 0;
+                int supported = EnemyWorksOnMap(type, nodes) ? 1 : 0;
+                int traits = outside | (supported << 1);
+                if (reportedEnemyTraits[i] == traits)
+                    continue;
+                EnemyTraitsResult result =
+                    NativeBridge.ReportEnemySpawnTraits(i, outside, supported);
+                if (result != EnemyTraitsResult.Recorded)
+                {
+                    Debug.LogError("[Kue] Enemy traits report failed at " + i + ": " + result);
+                    return;
+                }
+                reportedEnemyTraits[i] = traits;
+            }
         }
 
         private static Vector3 SnapToNavMesh(Vector3 position)
@@ -2009,6 +2337,32 @@ namespace Kue.Internal
                 NavMesh.SamplePosition(position, out hit, 40f, NavMesh.AllAreas))
                 return hit.position;
             return position;
+        }
+
+        private static bool Reachable(Vector3 from, Vector3 to)
+        {
+            NavMeshPath path = new NavMeshPath();
+            return NavMesh.CalculatePath(from, to, NavMesh.AllAreas, path) &&
+                   path.status == NavMeshPathStatus.PathComplete;
+        }
+
+        private static Vector3 SpotNearPlayer(PlayerControllerB target, float distance)
+        {
+            Vector3 origin = SnapToNavMesh(TargetPosition(target));
+            if (distance < 1f)
+                return origin;
+            float tolerance = Mathf.Max(3f, distance * 0.35f);
+            for (int attempt = 0; attempt < 16; attempt++)
+            {
+                float angle = UnityEngine.Random.Range(0f, Mathf.PI * 2f);
+                Vector3 candidate =
+                    origin + new Vector3(Mathf.Cos(angle), 0f, Mathf.Sin(angle)) * distance;
+                NavMeshHit hit;
+                if (NavMesh.SamplePosition(candidate, out hit, tolerance, NavMesh.AllAreas) &&
+                    Reachable(hit.position, origin))
+                    return hit.position;
+            }
+            return origin;
         }
 
         private void SpawnNestForEnemy(EnemyType type, Vector3 position)
@@ -2046,296 +2400,289 @@ namespace Kue.Internal
                 Destroy(nest.gameObject);
         }
 
-        private IEnumerator SpawnBushWolfManaged()
+        private bool SpawnEnemyAt(EnemyType type, Vector3 position)
         {
-            MoldSpreadManager mold = UnityEngine.Object.FindObjectOfType<MoldSpreadManager>();
-            GameObject[] nodes =
-                RoundManager.Instance == null ? null : RoundManager.Instance.outsideAINodes;
-            if (mold == null || nodes == null || nodes.Length == 0)
-                yield break;
-            mold.GenerateMold(nodes[UnityEngine.Random.Range(0, nodes.Length)].transform.position,
-                              1);
-            yield return new WaitForSeconds(0.5f);
-            mold.RemoveAllMold();
+            SpawnNestForEnemy(type, position);
+            NetworkObjectReference reference = RoundManager.Instance.SpawnEnemyGameObject(
+                position, UnityEngine.Random.Range(0f, 360f), -1, type);
+            NetworkObject networkObject;
+            return reference.TryGet(out networkObject) && networkObject != null;
         }
 
-        private void SpawnEnemyAtPlayerManaged(int packed)
+        private EnemyType SpawnableEnemyType(int index, PlayerControllerB local)
         {
-            int index = packed & 0xfff;
-            int count = Mathf.Clamp((packed >> 12) & 0x1f, 1, 20);
-            bool outside = (packed & (1 << 17)) != 0;
-            int clientId = (packed >> 18) & 0xfff;
-            PlayerControllerB target = PlayerByClientId(clientId);
-            PlayerControllerB local = LocalPlayer();
-            if (target == null || local == null || index < 0 || index >= enemyCatalog.Count ||
-                RoundManager.Instance == null)
+            if (index < 0 || index >= enemyCatalog.Count || RoundManager.Instance == null ||
+                StartOfRound.Instance == null || local == null)
             {
-                Debug.LogError("[Kue] Targeted enemy spawn rejected: client=" + clientId +
-                               " target=" + (target == null ? "null" : target.playerUsername) +
-                               " host=" + (local != null && local.IsHost) + " type=" + index +
-                               "/" + enemyCatalog.Count);
-                if (HUDManager.Instance != null)
-                    HUDManager.Instance.DisplayTip("Kue", "Enemy spawn failed: target unavailable");
-                return;
+                ReportActionFailure("Enemy spawn failed: session or type unavailable");
+                return null;
             }
-
             if (!local.IsHost)
             {
-                Debug.LogWarning("[Kue] Targeted network enemy spawn requires host; local client=" +
-                                 local.actualClientId + " target=" + target.playerUsername);
-                if (HUDManager.Instance != null)
-                    HUDManager.Instance.DisplayTip("Kue", "Networked enemy spawning requires host");
-                return;
+                ReportActionFailure("Only the host can create enemies");
+                return null;
             }
             EnemyType type = enemyCatalog[index];
-            if (LiveNodes(true).Count == 0 && LiveNodes(false).Count == 0)
+            if (type == null || !EnemyWorksOnMap(type, CountMapNodes()))
             {
-                ReportActionFailure("Enemy spawn failed: no moon loaded, land first");
+                ReportActionFailure((type == null ? "That enemy" : type.enemyName) +
+                                    " cannot live on this map");
+                return null;
+            }
+            return type;
+        }
+
+        private void SpawnEnemyManaged(int index, int count)
+        {
+            EnemyType type = SpawnableEnemyType(index, LocalPlayer());
+            if (type == null)
+                return;
+            List<GameObject> nodes = LiveNodes(HabitatNodes(type));
+            if (nodes.Count == 0)
+            {
+                ReportActionFailure(type.enemyName + " has nowhere to live on this map");
                 return;
             }
-            Vector3 position = SnapToNavMesh(TargetPosition(target) + TargetForward(target) * 2f);
-            List<EnemyAI> spawned = new List<EnemyAI>();
-            for (int i = 0; i < count; i++)
+            int spawned = 0;
+            for (int i = 0; i < Mathf.Clamp(count, 1, MaximumSpawnCount); i++)
+                if (SpawnEnemyAt(
+                        type, nodes[UnityEngine.Random.Range(0, nodes.Count)].transform.position))
+                    spawned++;
+            string area = type.isOutsideEnemy ? " outside" : " in the facility";
+            Debug.Log("[Kue] Spawned " + spawned + " x " + type.enemyName + area);
+            ShowTip("Spawned " + spawned + " " + type.enemyName + area);
+        }
+
+        private void SpawnEnemyAtPlayerManaged(int index, int count, int clientId, int distance)
+        {
+            PlayerControllerB target = PlayerByClientId(clientId);
+            if (target == null || target.isPlayerDead)
             {
-                Vector3 offset = UnityEngine.Random.insideUnitSphere * 1.5f;
-                offset.y = 0f;
-                if (string.Equals(type.enemyName, "Bush Wolf", StringComparison.OrdinalIgnoreCase))
-                    StartCoroutine(SpawnBushWolfAtManaged(position + offset));
-                else
-                {
-                    SpawnNestForEnemy(type, position + offset);
-                    NetworkObjectReference reference =
-                        RoundManager.Instance.SpawnEnemyGameObject(position + offset, 0f, -1, type);
-                    NetworkObject networkObject;
-                    if (reference.TryGet(out networkObject) && networkObject != null)
-                    {
-                        EnemyAI enemy = networkObject.GetComponentInParent<EnemyAI>();
-                        if (enemy == null)
-                            enemy = networkObject.GetComponentInChildren<EnemyAI>();
-                        if (enemy != null)
-                            spawned.Add(enemy);
-                    }
-                }
+                ReportActionFailure("Enemy spawn failed: that player is not alive");
+                return;
             }
-            if (spawned.Count > 0)
-                StartCoroutine(StabilizeEnemyTeleport(spawned, target, 6));
-            Debug.Log("[Kue] Spawned " + count + " x " + type.enemyName + " at " +
-                      target.playerUsername + " client=" + clientId + " position=" + position +
-                      " requestedOutside=" + outside + " resolved=" + spawned.Count);
-            if (HUDManager.Instance != null)
-                HUDManager.Instance.DisplayTip("Kue", "Spawned " + count + " " + type.enemyName +
-                                                          " at " + target.playerUsername);
+            EnemyType type = SpawnableEnemyType(index, LocalPlayer());
+            if (type == null)
+                return;
+            if (type.isOutsideEnemy == target.isInsideFactory)
+            {
+                ReportActionFailure(type.enemyName + " only works " +
+                                    (type.isOutsideEnemy ? "outside" : "inside the facility") +
+                                    ", and " + target.playerUsername + " is not there");
+                return;
+            }
+            float ring = Mathf.Max(MinimumEnemySpawnDistance, distance);
+            int spawned = 0;
+            for (int i = 0; i < Mathf.Clamp(count, 1, MaximumSpawnCount); i++)
+                if (SpawnEnemyAt(type, SpotNearPlayer(target, ring)))
+                    spawned++;
+            Debug.Log("[Kue] Spawned " + spawned + " x " + type.enemyName + " about " + ring +
+                      " m from " + target.playerUsername);
+            ShowTip("Spawned " + spawned + " " + type.enemyName + " near " + target.playerUsername);
         }
 
-        private IEnumerator SpawnBushWolfAtManaged(Vector3 position)
+        private void SummonEnemyTypeAtPlayerManaged(int index, int count, int clientId,
+                                                    int distance)
         {
-            MoldSpreadManager mold = UnityEngine.Object.FindObjectOfType<MoldSpreadManager>();
-            if (mold == null)
-                yield break;
-            mold.GenerateMold(position, 1);
-            yield return new WaitForSeconds(0.5f);
-            mold.RemoveAllMold();
-        }
-
-        private void SummonEnemyTypeAtPlayerManaged(int packed)
-        {
-            int index = packed & 0xfff;
-            int requested = Mathf.Clamp((packed >> 12) & 0x1f, 1, 20);
-            int clientId = (packed >> 18) & 0xfff;
             PlayerControllerB target = PlayerByClientId(clientId);
             PlayerControllerB local = LocalPlayer();
             if (target == null || local == null || index < 0 || index >= enemyCatalog.Count)
             {
-                if (HUDManager.Instance != null)
-                    HUDManager.Instance.DisplayTip("Kue", "Summon failed: target/type unavailable");
+                ReportActionFailure("Summon failed: target or type unavailable");
                 return;
             }
-
-            EnemyType selectedType = enemyCatalog[index];
-            List<EnemyAI> existing = new List<EnemyAI>();
-            foreach (EnemyAI enemy in UnityEngine.Object.FindObjectsOfType<EnemyAI>())
+            EnemyType selected = enemyCatalog[index];
+            List<EnemyAI> chosen = new List<EnemyAI>();
+            foreach (UnityEngine.Object loaded in UnityEngine.Object.FindObjectsOfType<EnemyAI>())
             {
-                if (existing.Count >= requested)
+                EnemyAI enemy = loaded as EnemyAI;
+                if (chosen.Count >= Mathf.Clamp(count, 1, MaximumSpawnCount))
                     break;
-                if (enemy == null || enemy.isEnemyDead || enemy.enemyType == null)
-                    continue;
-                bool match = enemy.enemyType == selectedType ||
-                             string.Equals(enemy.enemyType.enemyName, selectedType.enemyName,
-                                           StringComparison.OrdinalIgnoreCase);
-                if (!match)
-                    continue;
-                try
-                {
-                    if (local.IsHost)
-                        enemy.ChangeOwnershipOfEnemy(local.actualClientId);
-                    else
-                        enemy.ChangeEnemyOwnerServerRpc(local.actualClientId);
-                    existing.Add(enemy);
-                }
-                catch (Exception e)
-                {
-                    Debug.LogError("[Kue] Selected enemy summon ownership failed: " + e);
-                }
+                if (enemy != null && !enemy.isEnemyDead && enemy.enemyType == selected &&
+                    SharesArea(enemy, target))
+                    chosen.Add(enemy);
             }
-
-            if (existing.Count > 0)
-                StartCoroutine(StabilizeEnemyTeleport(existing, target, local.IsHost ? 8 : 90));
-
-            int missing = requested - existing.Count;
-            if (missing > 0 && local.IsHost)
+            if (chosen.Count == 0)
             {
-                int spawnPacked = (index & 0xfff) | ((missing & 0x1f) << 12) |
-                                  (packed & (1 << 17)) | ((clientId & 0xfff) << 18);
-                SpawnEnemyAtPlayerManaged(spawnPacked);
+                ReportActionFailure("No living " + selected.enemyName + " can reach " +
+                                    target.playerUsername);
+                return;
             }
-
-            string result = "Moved " + existing.Count + " existing " + selectedType.enemyName;
-            if (missing > 0)
-                result += local.IsHost ? "; spawning " + missing + " missing"
-                                       : "; " + missing + " not present (host required to create)";
-            Debug.Log("[Kue] " + result + " to " + target.playerUsername);
-            if (HUDManager.Instance != null)
-                HUDManager.Instance.DisplayTip("Kue", result);
+            StartCoroutine(MoveEnemiesToPlayer(chosen, target, distance));
         }
 
         private void TeleportAllEnemiesManaged(PlayerControllerB target)
         {
-            PlayerControllerB local = LocalPlayer();
-            if (target == null || local == null)
+            if (target == null || LocalPlayer() == null)
             {
-                Debug.LogError("[Kue] Enemy teleport rejected: target=" +
-                               (target == null ? "null" : target.playerUsername) +
-                               " host=" + (local != null && local.IsHost));
-                if (HUDManager.Instance != null)
-                    HUDManager.Instance.DisplayTip("Kue", "Enemy teleport target unavailable");
+                ReportActionFailure("Enemy teleport failed: target unavailable");
                 return;
             }
-            List<EnemyAI> enemies = new List<EnemyAI>();
-            foreach (EnemyAI enemy in UnityEngine.Object.FindObjectsOfType<EnemyAI>())
+            List<EnemyAI> chosen = new List<EnemyAI>();
+            foreach (UnityEngine.Object loaded in UnityEngine.Object.FindObjectsOfType<EnemyAI>())
             {
-                if (enemy == null || enemy.isEnemyDead)
-                    continue;
-                try
-                {
-                    if (local.IsHost)
-                        enemy.ChangeOwnershipOfEnemy(local.actualClientId);
-                    else
-                        enemy.ChangeEnemyOwnerServerRpc(local.actualClientId);
-                    enemies.Add(enemy);
-                }
-                catch (Exception e)
-                {
-                    Debug.LogError("[Kue] Enemy teleport ownership failed: " + e);
-                }
+                EnemyAI enemy = loaded as EnemyAI;
+                if (enemy != null && !enemy.isEnemyDead && SharesArea(enemy, target))
+                    chosen.Add(enemy);
             }
-            StartCoroutine(StabilizeEnemyTeleport(enemies, target, local.IsHost ? 8 : 90));
+            if (chosen.Count == 0)
+            {
+                ReportActionFailure("No living enemy can reach " + target.playerUsername);
+                return;
+            }
+            StartCoroutine(MoveEnemiesToPlayer(chosen, target, 0f));
         }
 
-        private static bool MoveEnemyAndSync(EnemyAI enemy, Vector3 position,
-                                             PlayerControllerB local)
+        private static void WarpEnemy(EnemyAI enemy, Vector3 position)
         {
-            if (enemy == null || enemy.isEnemyDead)
-                return false;
-            if (enemy.thisNetworkObject != null &&
-                enemy.thisNetworkObject.OwnerClientId != local.actualClientId)
-                return false;
-
             Vector3 previous = enemy.transform.position;
-            bool warped = false;
             NavMeshAgent agent = enemy.agent;
-            if (agent != null && agent.enabled && agent.isOnNavMesh)
-                warped = agent.Warp(position);
-            if (!warped)
+            if (agent == null || !agent.enabled || !agent.isOnNavMesh || !agent.Warp(position))
                 enemy.transform.position = position;
-
             enemy.serverPosition = previous;
             enemy.SyncPositionToClients();
-            return true;
         }
 
-        private static void SyncEnemyHabitat(EnemyAI enemy, bool outside)
-        {
-            if (enemy.isOutside == outside)
-                return;
-            enemy.SetEnemyOutside(outside);
-            Debug.Log("[Kue] " + enemy.name + " switched to hunting " +
-                      (outside ? "outside" : "inside"));
-        }
-
-        private IEnumerator ApplyHabitatAfterStart(List<EnemyAI> enemies, bool outside)
-        {
-            yield return null;
-            yield return null;
-            foreach (EnemyAI enemy in enemies)
-                if (enemy != null && !enemy.isEnemyDead && enemy.path1 != null)
-                    SyncEnemyHabitat(enemy, outside);
-        }
-
-        private IEnumerator StabilizeEnemyTeleport(List<EnemyAI> enemies, PlayerControllerB target,
-                                                   int frames)
+        private IEnumerator MoveEnemiesToPlayer(List<EnemyAI> enemies, PlayerControllerB target,
+                                                float distance)
         {
             PlayerControllerB local = LocalPlayer();
             if (local == null || target == null)
                 yield break;
-            int moved = 0;
-            HashSet<int> movedEnemies = new HashSet<int>();
-            for (int frame = 0; frame < frames; frame++)
+            float ring = Mathf.Max(MinimumEnemySpawnDistance, distance);
+            Vector3[] spots = new Vector3[enemies.Count];
+            bool[] moved = new bool[enemies.Count];
+            for (int i = 0; i < spots.Length; i++)
+                spots[i] = SpotNearPlayer(target, ring);
+            int settledFrames = 0;
+            for (int frame = 0; frame < 240 && settledFrames < 6; frame++)
             {
-                Vector3 center =
-                    SnapToNavMesh(TargetPosition(target) + TargetForward(target) * 2f);
-                int layoutIndex = 0;
-                foreach (EnemyAI enemy in enemies)
+                bool allMoved = true;
+                for (int i = 0; i < enemies.Count; i++)
                 {
+                    EnemyAI enemy = enemies[i];
                     if (enemy == null || enemy.isEnemyDead)
                         continue;
-                    float angle = layoutIndex * 0.7f;
-                    float radius = 1f + (layoutIndex / 9) * 0.8f;
-                    layoutIndex++;
-                    Vector3 position = center + new Vector3(Mathf.Cos(angle) * radius, 0f,
-                                                            Mathf.Sin(angle) * radius);
-                    try
+                    if (!EnemyOwnedBy(enemy, local.actualClientId))
                     {
-                        bool owned = enemy.thisNetworkObject != null &&
-                                     enemy.thisNetworkObject.OwnerClientId == local.actualClientId;
-                        if (!owned && !local.IsHost && frame % 15 == 0)
+                        allMoved = false;
+                        if (frame % 20 == 0)
                             enemy.ChangeEnemyOwnerServerRpc(local.actualClientId);
-                        if (MoveEnemyAndSync(enemy, position, local))
-                            movedEnemies.Add(enemy.GetInstanceID());
-                        if (owned && enemy.path1 != null)
-                            SyncEnemyHabitat(enemy, !target.isInsideFactory);
+                        continue;
                     }
-                    catch (Exception e)
-                    {
-                        Debug.LogError("[Kue] Enemy teleport sync failed for " + enemy.name + ": " +
-                                       e);
-                    }
+                    if (!moved[i] || (enemy.transform.position - spots[i]).sqrMagnitude > 4f)
+                        WarpEnemy(enemy, spots[i]);
+                    moved[i] = true;
                 }
+                if (allMoved)
+                    settledFrames++;
                 yield return null;
             }
-            moved = movedEnemies.Count;
-            Debug.Log("[Kue] Authoritatively teleported " + moved + " enemies to " +
-                      target.playerUsername + " client=" + target.playerClientId +
-                      " position=" + TargetPosition(target));
-            if (HUDManager.Instance != null)
-                HUDManager.Instance.DisplayTip("Kue", "Teleported " + moved + " enemies to " +
-                                                          target.playerUsername);
+            int count = 0;
+            for (int i = 0; i < enemies.Count; i++)
+            {
+                EnemyAI enemy = enemies[i];
+                if (!moved[i] || enemy == null || enemy.isEnemyDead)
+                    continue;
+                count++;
+                if (target != local && !target.isPlayerDead &&
+                    EnemyOwnedBy(enemy, local.actualClientId))
+                    enemy.ChangeEnemyOwnerServerRpc(target.actualClientId);
+            }
+            Debug.Log("[Kue] Teleported " + count + "/" + enemies.Count + " enemies to " +
+                      target.playerUsername);
+            ShowTip("Teleported " + count + " enemies to " + target.playerUsername);
         }
 
-        private void SpawnItemAtPlayerManaged(int packed)
+        private static Vector3 FloorBelow(Vector3 position, float verticalOffset)
         {
-            int index = packed & 0xfff;
-            int count = Mathf.Clamp((packed >> 12) & 0x1f, 1, 20);
-            int clientId = (packed >> 17) & 0xfff;
+            StartOfRound round = StartOfRound.Instance;
+            int mask =
+                round != null ? round.collidersAndRoomMaskAndDefault : Physics.DefaultRaycastLayers;
+            RaycastHit hit;
+            if (Physics.Raycast(position, Vector3.down, out hit, 80f, mask,
+                                QueryTriggerInteraction.Ignore))
+                return hit.point + Vector3.up * (0.04f + verticalOffset);
+            return position;
+        }
+
+        private static void RestItemOnFloor(GrabbableObject item, PlayerControllerB local,
+                                            bool inElevator, bool inShipRoom)
+        {
+            StartOfRound round = StartOfRound.Instance;
+            Transform parent = inElevator ? round.elevatorTransform : round.propsContainer;
+            item.transform.SetParent(parent, true);
+            Vector3 floor = FloorBelow(item.transform.position, item.itemProperties.verticalOffset);
+            item.startFallingPosition = parent.InverseTransformPoint(item.transform.position);
+            item.targetFloorPosition = parent.InverseTransformPoint(floor);
+            item.floorYRot = -1;
+            item.fallTime = 0f;
+            item.hasHitGround = false;
+            item.reachedFloorTarget = false;
+            item.EnablePhysics(true);
+            local.SetItemInElevator(inShipRoom, inElevator, item);
+        }
+
+        private IEnumerator SettleItems(List<GrabbableObject> items, List<int> scrapValues,
+                                        bool inElevator, bool inShipRoom)
+        {
+            yield return null;
+            yield return null;
+            PlayerControllerB local = LocalPlayer();
+            StartOfRound round = StartOfRound.Instance;
+            if (local == null || round == null)
+                yield break;
+            foreach (GrabbableObject item in items)
+                if (item != null)
+                    RestItemOnFloor(item, local, inElevator, inShipRoom);
+            if (round.connectedPlayersAmount <= 0)
+                yield break;
+            yield return new WaitForSeconds(0.3f);
+            if (ThrowObjectServerRpcMethod == null)
+                throw new MissingMethodException("PlayerControllerB.ThrowObjectServerRpc");
+            List<NetworkObjectReference> scrapReferences = new List<NetworkObjectReference>();
+            List<int> syncedValues = new List<int>();
+            for (int i = 0; i < items.Count; i++)
+            {
+                GrabbableObject item = items[i];
+                if (item == null || item.NetworkObject == null || !item.NetworkObject.IsSpawned ||
+                    item.isHeld)
+                    continue;
+                NetworkObjectReference reference = item.NetworkObject;
+                if (scrapValues != null && scrapValues[i] >= 0)
+                {
+                    scrapReferences.Add(reference);
+                    syncedValues.Add(scrapValues[i]);
+                }
+                ThrowObjectServerRpcMethod.Invoke(local,
+                                                  new object[] { reference, inElevator, inShipRoom,
+                                                                 item.targetFloorPosition, -1 });
+            }
+            RoundManager manager = RoundManager.Instance;
+            if (scrapReferences.Count == 0 || manager == null)
+                yield break;
+            float levelValue = manager.totalScrapValueInLevel;
+            int collected = manager.scrapCollectedInLevel;
+            int found = manager.valueOfFoundScrapItems;
+            manager.SyncScrapValuesClientRpc(scrapReferences.ToArray(), syncedValues.ToArray());
+            manager.totalScrapValueInLevel = levelValue;
+            manager.scrapCollectedInLevel = collected;
+            manager.valueOfFoundScrapItems = found;
+        }
+
+        private void SpawnItemAtPlayerManaged(int index, int count, int clientId, int fixedValue)
+        {
             PlayerControllerB target = PlayerByClientId(clientId);
             PlayerControllerB local = LocalPlayer();
-            if (target == null || local == null || StartOfRound.Instance == null)
+            StartOfRound round = StartOfRound.Instance;
+            if (target == null || local == null || round == null)
             {
                 ReportActionFailure("Item spawn failed: target player unavailable");
                 return;
             }
             if (!local.IsHost)
             {
-                ReportActionFailure("Item spawning requires host");
+                ReportActionFailure("Only the host can create items");
                 return;
             }
             if (index < 0 || index >= itemCatalog.Count)
@@ -2345,14 +2692,21 @@ namespace Kue.Internal
                 return;
             }
             Item item = itemCatalog[index];
-            Vector3 position =
-                target.transform.position + Vector3.up * 1.2f + target.transform.forward * 1.5f;
-            int spawned = 0;
-            for (int i = 0; i < count; i++)
+            bool inElevator = target.isInElevator;
+            bool inShipRoom = target.isInHangarShipRoom;
+            Transform parent = inElevator ? round.elevatorTransform : round.propsContainer;
+            Vector3 origin =
+                target.transform.position + Vector3.up * 1.1f + TargetForward(target) * 1.2f;
+            float valueScale =
+                RoundManager.Instance != null ? RoundManager.Instance.scrapValueMultiplier : 1f;
+            List<GrabbableObject> spawned = new List<GrabbableObject>();
+            List<int> scrapValues = new List<int>();
+            for (int i = 0; i < Mathf.Clamp(count, 1, MaximumSpawnCount); i++)
             {
-                GameObject gameObject = Instantiate(
-                    item.spawnPrefab, position + UnityEngine.Random.insideUnitSphere * 0.25f,
-                    Quaternion.identity, StartOfRound.Instance.propsContainer);
+                Vector2 scatter = UnityEngine.Random.insideUnitCircle * 0.5f;
+                GameObject gameObject =
+                    Instantiate(item.spawnPrefab, origin + new Vector3(scatter.x, 0f, scatter.y),
+                                Quaternion.identity, parent);
                 GrabbableObject grabbable = gameObject.GetComponent<GrabbableObject>();
                 NetworkObject networkObject = gameObject.GetComponent<NetworkObject>();
                 if (grabbable == null || networkObject == null)
@@ -2360,125 +2714,202 @@ namespace Kue.Internal
                     Destroy(gameObject);
                     continue;
                 }
+                int value = -1;
                 if (item.isScrap)
-                    grabbable.SetScrapValue(
-                        UnityEngine.Random.Range(Mathf.Max(0, item.minValue),
-                                                 Mathf.Max(item.minValue + 1, item.maxValue + 1)));
+                {
+                    value = fixedValue >= 0
+                                ? fixedValue
+                                : (int)(UnityEngine.Random.Range(item.minValue, item.maxValue) *
+                                        valueScale);
+                    grabbable.SetScrapValue(value);
+                }
+                grabbable.fallTime = 0f;
                 networkObject.Spawn(false);
-                PlaceItemAtPlayer(grabbable, target, position);
-                spawned++;
+                spawned.Add(grabbable);
+                scrapValues.Add(value);
             }
-            if (spawned == 0)
+            if (spawned.Count == 0)
             {
                 ReportActionFailure("Item spawn failed: " + item.itemName +
                                     " has no grabbable network prefab");
                 return;
             }
-            Debug.Log("[Kue] Spawned " + spawned + " x " + item.itemName + " at " +
-                      target.playerUsername + " position=" + position);
-            if (HUDManager.Instance != null)
-                HUDManager.Instance.DisplayTip("Kue", "Spawned " + spawned + " " + item.itemName);
-        }
-
-        private static void PlaceItemAtPlayer(GrabbableObject item, PlayerControllerB target,
-                                              Vector3 position)
-        {
-            if (item == null || target == null || StartOfRound.Instance == null)
-                return;
-            item.transform.SetParent(StartOfRound.Instance.propsContainer, true);
-            item.transform.position = position;
-            target.SetItemInElevator(target.isInHangarShipRoom, target.isInElevator, item);
-            Vector3 localPosition = item.transform.parent.InverseTransformPoint(position);
-            item.startFallingPosition = localPosition;
-            item.targetFloorPosition = localPosition;
-            item.fallTime = 0f;
-            item.EnablePhysics(true);
+            StartCoroutine(SettleItems(spawned, scrapValues, inElevator, inShipRoom));
+            Debug.Log("[Kue] Spawned " + spawned.Count + " x " + item.itemName + " at " +
+                      target.playerUsername + (fixedValue >= 0 ? " worth " + fixedValue : ""));
+            ShowTip("Spawned " + spawned.Count + " " + item.itemName);
         }
 
         private void TeleportItemsToPlayerManaged(PlayerControllerB target)
         {
-            if (!RealPlayer(target))
+            PlayerControllerB local = LocalPlayer();
+            if (!RealPlayer(target) || local == null)
+            {
+                ReportActionFailure("Item teleport failed: target player unavailable");
                 return;
+            }
+            if (!local.IsHost)
+            {
+                ReportActionFailure("Only the host can move every item");
+                return;
+            }
             Vector3 center =
-                target.transform.position + target.transform.forward * 1.5f + Vector3.up * 0.5f;
-            int moved = 0;
-            int denied = 0;
+                target.transform.position + Vector3.up * 1.1f + TargetForward(target) * 1.5f;
+            List<GrabbableObject> moved = new List<GrabbableObject>();
             foreach (GrabbableObject item in UnityEngine.Object
                          .FindObjectsOfType<GrabbableObject>())
             {
-                if (item == null || item.isHeld || item.isPocketed || item.heldByPlayerOnServer)
+                if (item == null || item.itemProperties == null || item.isHeld || item.isPocketed ||
+                    item.heldByPlayerOnServer || item.deactivated)
                     continue;
-                if (!TakeOwnership(item))
-                {
-                    denied++;
-                    continue;
-                }
-                Vector3 offset = new Vector3((moved % 5) * 0.25f, (moved / 5) * 0.1f, 0f);
-                PlaceItemAtPlayer(item, target, center + offset);
-                moved++;
+                TakeOwnership(item);
+                int column = moved.Count % 6;
+                int row = (moved.Count / 6) % 6;
+                item.transform.position =
+                    center + new Vector3((column - 2.5f) * 0.3f, 0f, (row - 2.5f) * 0.3f);
+                moved.Add(item);
             }
-            Debug.Log("[Kue] Teleported " + moved + " loaded items to " + target.playerUsername);
-            if (denied > 0)
-                ReportActionFailure("Item teleport moved " + moved + "; ownership denied for " +
-                                    denied);
+            StartCoroutine(
+                SettleItems(moved, null, target.isInElevator, target.isInHangarShipRoom));
+            Debug.Log("[Kue] Teleported " + moved.Count + " loose items to " +
+                      target.playerUsername);
+            ShowTip("Moved " + moved.Count + " items to " + target.playerUsername);
+        }
+
+        private List<EnemyAI> LivingEnemies()
+        {
+            List<EnemyAI> living = new List<EnemyAI>();
+            foreach (UnityEngine.Object loaded in UnityEngine.Object.FindObjectsOfType<EnemyAI>())
+            {
+                EnemyAI enemy = loaded as EnemyAI;
+                if (enemy != null && !enemy.isEnemyDead)
+                    living.Add(enemy);
+            }
+            return living;
         }
 
         private void KillAllEnemiesManaged()
         {
             PlayerControllerB local = LocalPlayer();
-            List<EnemyAI> enemies = new List<EnemyAI>();
-            foreach (EnemyAI enemy in UnityEngine.Object.FindObjectsOfType<EnemyAI>())
+            if (local == null)
             {
-                if (enemy == null || enemy.isEnemyDead)
-                    continue;
-                try
-                {
-                    if (local != null)
-                        enemy.ChangeEnemyOwnerServerRpc(local.actualClientId);
-                    enemies.Add(enemy);
-                }
-                catch (Exception e)
-                {
-                    Debug.LogError("[Kue] Enemy kill failed: " + e);
-                }
+                ReportActionFailure("Enemy kill failed: local player unavailable");
+                return;
             }
-            StartCoroutine(KillEnemiesAfterOwnership(enemies));
+            StartCoroutine(KillEnemiesOnceOwned(LivingEnemies(), local));
         }
 
-        private IEnumerator KillEnemiesAfterOwnership(List<EnemyAI> enemies)
+        private IEnumerator KillEnemiesOnceOwned(List<EnemyAI> enemies, PlayerControllerB local)
         {
-            yield return new WaitForSeconds(0.15f);
-            foreach (EnemyAI enemy in enemies)
+            bool[] handled = new bool[enemies.Count];
+            int killed = 0;
+            int removed = 0;
+            int immune = 0;
+            int pending = enemies.Count;
+            for (int frame = 0; frame < 240 && pending > 0; frame++)
             {
-                if (enemy == null || enemy.isEnemyDead)
-                    continue;
-                try
+                for (int i = 0; i < enemies.Count; i++)
                 {
-                    enemy.KillEnemyOnOwnerClient(true);
+                    EnemyAI enemy = enemies[i];
+                    if (handled[i])
+                        continue;
+                    if (enemy == null || enemy.isEnemyDead)
+                    {
+                        handled[i] = true;
+                        pending--;
+                        continue;
+                    }
+                    if (!EnemyOwnedBy(enemy, local.actualClientId))
+                    {
+                        if (frame % 20 == 0)
+                            enemy.ChangeEnemyOwnerServerRpc(local.actualClientId);
+                        continue;
+                    }
+                    handled[i] = true;
+                    pending--;
+                    EnemyType type = enemy.enemyType;
+                    if (type != null && type.canDie)
+                    {
+                        enemy.KillEnemyOnOwnerClient(false);
+                        killed++;
+                    }
+                    else if (local.IsHost && enemy.thisNetworkObject != null &&
+                             enemy.thisNetworkObject.IsSpawned)
+                    {
+                        enemy.thisNetworkObject.Despawn(true);
+                        removed++;
+                    }
+                    else if (type != null && type.canBeDestroyed)
+                    {
+                        enemy.KillEnemyOnOwnerClient(true);
+                        removed++;
+                    }
+                    else
+                        immune++;
                 }
-                catch (Exception e)
-                {
-                    Debug.LogError("[Kue] Deferred enemy kill failed: " + e);
-                }
+                yield return null;
             }
+            string result = "Killed " + killed + " enemies, removed " + removed;
+            if (immune + pending > 0)
+                result += "; " + (immune + pending) + " cannot be killed from here";
+            Debug.Log("[Kue] " + result);
+            ShowTip(result);
         }
 
         private void StunAllEnemiesManaged()
         {
             PlayerControllerB local = LocalPlayer();
-            foreach (EnemyAI enemy in UnityEngine.Object.FindObjectsOfType<EnemyAI>())
+            if (local == null)
             {
-                if (enemy == null || enemy.isEnemyDead)
-                    continue;
-                try
-                {
-                    enemy.SetEnemyStunned(true, 60f, local);
-                }
-                catch (Exception e)
-                {
-                    Debug.LogError("[Kue] Enemy stun failed: " + e);
-                }
+                ReportActionFailure("Enemy stun failed: local player unavailable");
+                return;
             }
+            StartCoroutine(StunEnemiesOnceOwned(LivingEnemies(), local));
+        }
+
+        private IEnumerator StunEnemiesOnceOwned(List<EnemyAI> enemies, PlayerControllerB local)
+        {
+            bool[] handled = new bool[enemies.Count];
+            int stunned = 0;
+            int pending = 0;
+            for (int i = 0; i < enemies.Count; i++)
+            {
+                handled[i] = enemies[i].enemyType == null || !enemies[i].enemyType.canBeStunned;
+                if (!handled[i])
+                    pending++;
+            }
+            int immune = enemies.Count - pending;
+            for (int frame = 0; frame < 240 && pending > 0; frame++)
+            {
+                for (int i = 0; i < enemies.Count; i++)
+                {
+                    EnemyAI enemy = enemies[i];
+                    if (handled[i])
+                        continue;
+                    if (enemy == null || enemy.isEnemyDead)
+                    {
+                        handled[i] = true;
+                        pending--;
+                        continue;
+                    }
+                    if (!EnemyOwnedBy(enemy, local.actualClientId))
+                    {
+                        if (frame % 20 == 0)
+                            enemy.ChangeEnemyOwnerServerRpc(local.actualClientId);
+                        continue;
+                    }
+                    handled[i] = true;
+                    pending--;
+                    enemy.SetEnemyStunned(true, StunSeconds, local);
+                    stunned++;
+                }
+                yield return null;
+            }
+            string result = "Stunned " + stunned + " enemies for 60 s";
+            if (immune > 0)
+                result += "; " + immune + " cannot be stunned";
+            Debug.Log("[Kue] " + result);
+            ShowTip(result);
         }
 
         private void SetFly(bool enabled)
@@ -2490,7 +2921,6 @@ namespace Kue.Internal
             {
                 RestoreFlyState();
                 flyEnabled = false;
-                NativeBridge.ReportFlyState(0);
                 return;
             }
             if (flyPlayer != local)
@@ -2502,7 +2932,6 @@ namespace Kue.Internal
             if (flyController != null)
                 flyController.enabled = false;
             flyEnabled = true;
-            NativeBridge.ReportFlyState(1);
         }
 
         private void RestoreFlyState()
@@ -2615,7 +3044,6 @@ namespace Kue.Internal
             Transform container = desk.deskObjectsContainer.transform;
             Bounds counter = desk.triggerCollider.bounds;
             int moved = 0;
-            int denied = 0;
             foreach (GrabbableObject item in UnityEngine.Object
                          .FindObjectsOfType<GrabbableObject>())
             {
@@ -2627,11 +3055,7 @@ namespace Kue.Internal
                 NetworkObject networkObject = item.GetComponent<NetworkObject>();
                 if (networkObject == null)
                     continue;
-                if (!TakeOwnership(item))
-                {
-                    denied++;
-                    continue;
-                }
+                TakeOwnership(item);
                 Vector3 point = RoundManager.RandomPointInBounds(counter);
                 point.y = counter.min.y + item.itemProperties.verticalOffset;
                 Vector3 offset = container.InverseTransformPoint(point);
@@ -2642,10 +3066,10 @@ namespace Kue.Internal
                 moved++;
             }
             Debug.Log("[Kue] Deposited " + moved + " scrap items on the company desk");
-            if (moved == 0 && denied == 0)
+            if (moved == 0)
                 ReportActionFailure("Deposit found no scrap in the ship");
-            else if (denied > 0)
-                ReportActionFailure("Deposit moved " + moved + "; ownership denied for " + denied);
+            else
+                ShowTip("Put " + moved + " scrap items on the counter");
         }
 
         private void AddTerminalCreditsManaged(int amount)
@@ -3008,45 +3432,44 @@ namespace Kue.Internal
             return true;
         }
 
-        private void ToggleHorn(bool car)
+        private void ToggleShipHorn()
         {
-            if (car)
+            ShipAlarmCord horn = FindOne("ShipAlarmCord") as ShipAlarmCord;
+            if (horn == null)
             {
-                carHornEnabled = !carHornEnabled;
-                foreach (UnityEngine.Object vehicle in FindAll("VehicleController"))
-                    InvokeAny(vehicle, "SetHonkServerRpc", carHornEnabled, -1);
+                shipHornEnabled = false;
+                ReportActionFailure("Ship horn is not on this ship");
+                return;
             }
+            shipHornEnabled = !shipHornEnabled;
+            if (shipHornEnabled)
+                horn.HoldCordDown();
             else
-            {
-                shipHornEnabled = !shipHornEnabled;
-                ShipAlarmCord horn = FindOne("ShipAlarmCord") as ShipAlarmCord;
-                if (horn == null)
-                {
-                    shipHornEnabled = false;
-                    if (HUDManager.Instance != null)
-                        HUDManager.Instance.DisplayTip("Kue", "Ship horn is not loaded");
-                    return;
-                }
+                horn.StopHorn();
+            Debug.Log("[Kue] Ship horn toggled " + shipHornEnabled);
+        }
 
-                if (shipHornEnabled)
-                    horn.HoldCordDown();
-                else
-                    horn.StopHorn();
-                if (HUDManager.Instance != null)
-                    HUDManager.Instance.DisplayTip(
-                        "Kue", "Ship horn " + (shipHornEnabled ? "enabled" : "disabled"));
-                Debug.Log("[Kue] Ship horn toggled " + shipHornEnabled);
+        private void ToggleCruiserHorn()
+        {
+            UnityEngine.Object[] cruisers = FindAll("VehicleController");
+            if (cruisers.Length == 0)
+            {
+                carHornEnabled = false;
+                ReportActionFailure("There is no cruiser");
+                return;
             }
+            carHornEnabled = !carHornEnabled;
+            foreach (UnityEngine.Object cruiser in cruisers)
+                InvokeAny(cruiser, "SetHonkServerRpc", carHornEnabled, -1);
         }
 
         private void ForceEjectEveryoneManaged()
         {
             StartOfRound round = StartOfRound.Instance;
             PlayerControllerB local = LocalPlayer();
-            if (round == null || local == null || !local.IsHost)
+            if (round == null || local == null || !local.IsHost || !round.inShipPhase)
             {
-                if (HUDManager.Instance != null)
-                    HUDManager.Instance.DisplayTip("Kue", "Force eject is host-only");
+                ReportActionFailure("Firing the crew needs you to host with the ship in orbit");
                 return;
             }
             round.ManuallyEjectPlayersServerRpc();
@@ -3063,15 +3486,13 @@ namespace Kue.Internal
             PlayerControllerB local = LocalPlayer();
             if (player != local && (local == null || !local.IsHost))
             {
-                ReportActionFailure("Remote insanity changes require host");
+                ReportActionFailure("Only the host can mark other players for the ghost girl");
                 return;
             }
             float value = maximum ? player.maxInsanityLevel : 0f;
             player.insanityLevel = value;
             Debug.Log("[Kue] Set insanity for " + player.playerUsername + " to " + value);
-            if (HUDManager.Instance != null)
-                HUDManager.Instance.DisplayTip(
-                    "Kue", player.playerUsername + " insanity: " + Mathf.RoundToInt(value));
+            ShowTip(player.playerUsername + " insanity: " + Mathf.RoundToInt(value));
         }
 
         private void ShootAllShotgunsManaged()
@@ -3097,6 +3518,13 @@ namespace Kue.Internal
             }
         }
 
+        private static bool PlushieTrigger(UnityEngine.Object trigger)
+        {
+            Component component = trigger as Component;
+            return component != null && component.transform.parent != null &&
+                   component.transform.parent.gameObject.name.StartsWith("PlushiePJManContainer");
+        }
+
         private void UpdateTrollToggles()
         {
             if (!slideTaunt && !pjManSpam && !terminalSpamEnabled && !depositSpamEnabled &&
@@ -3111,13 +3539,8 @@ namespace Kue.Internal
             {
                 nextPjManPulse = Time.unscaledTime + pjManSpamInterval;
                 foreach (UnityEngine.Object trigger in FindAll("AnimatedObjectTrigger"))
-                {
-                    Component component = trigger as Component;
-                    if (component != null && component.transform.parent != null &&
-                        component.transform.parent.gameObject.name.StartsWith(
-                            "PlushiePJManContainer"))
+                    if (PlushieTrigger(trigger))
                         InvokeAny(trigger, "TriggerAnimation", LocalPlayer());
-                }
             }
             if (Time.unscaledTime < nextTrollPulse)
                 return;
@@ -3149,8 +3572,17 @@ namespace Kue.Internal
                 InvokeAny(FindOne("HangarShipDoor"), "SetDoorButtonsEnabled", true);
         }
 
+        private static bool MaskCanBecomeMasked(UnityEngine.Object mask, bool host)
+        {
+            GrabbableObject item = mask as GrabbableObject;
+            return item != null && !item.isHeld && !item.isPocketed &&
+                   (host || GetMember(mask, "previousPlayerHeldBy") != null);
+        }
+
         private void SpawnMaskedManaged()
         {
+            PlayerControllerB local = LocalPlayer();
+            bool host = local != null && local.IsHost;
             PlayerControllerB alive = null;
             StartOfRound round = StartOfRound.Instance;
             if (round != null && round.allPlayerScripts != null)
@@ -3160,328 +3592,916 @@ namespace Kue.Internal
                         alive = player;
                         break;
                     }
+            int created = 0;
             foreach (UnityEngine.Object mask in FindAll("HauntedMaskItem"))
             {
-                Component component = mask as Component;
-                if (component == null)
+                if (!MaskCanBecomeMasked(mask, host))
                     continue;
-                TakeOwnership(mask);
-                InvokeAny(mask, "ChangeOwnershipOfProp",
-                          LocalPlayer() == null ? 0UL : LocalPlayer().actualClientId);
-                SetMember(mask, "previousPlayerHeldBy", alive);
+                Component component = mask as Component;
+                if (host && GetMember(mask, "previousPlayerHeldBy") == null)
+                    SetMember(mask, "previousPlayerHeldBy", alive);
                 InvokeAny(mask, "CreateMimicServerRpc", BoolMember(mask, "isInFactory", false),
                           component.transform.position);
+                created++;
+            }
+            if (created == 0)
+                ReportActionFailure("No mask on the map can become a Masked right now");
+        }
+
+        private int HoardingBugRushIndex()
+        {
+            RoundManager manager = RoundManager.Instance;
+            if (manager == null || manager.currentLevel == null ||
+                manager.currentLevel.Enemies == null)
+                return -1;
+            List<SpawnableEnemyWithRarity> enemies = manager.currentLevel.Enemies;
+            for (int i = 0; i < enemies.Count; i++)
+                if (enemies[i] != null && enemies[i].enemyType != null &&
+                    string.Equals(enemies[i].enemyType.enemyName, "Hoarding bug",
+                                  StringComparison.OrdinalIgnoreCase))
+                    return i;
+            return -1;
+        }
+
+        private void StartHoardingBugInfestation()
+        {
+            int rushIndex = HoardingBugRushIndex();
+            int catalogIndex;
+            if (rushIndex < 0 || !enemyCatalogNames.TryGetValue("Hoarding bug", out catalogIndex))
+            {
+                ReportActionFailure("This moon has no Hoarding bug in its indoor spawn table");
+                return;
+            }
+            SetMember(RoundManager.Instance, "enemyRushIndex", rushIndex);
+            RoundManager.Instance.currentMaxInsidePower = 30f;
+            SpawnEnemyManaged(catalogIndex, 1);
+        }
+
+        private void ToggleAllMines()
+        {
+            UnityEngine.Object[] mines = FindAll("Landmine");
+            bool anyArmed = false;
+            foreach (UnityEngine.Object mine in mines)
+                anyArmed = anyArmed || BoolMember(mine, "mineActivated", false);
+            foreach (UnityEngine.Object mine in mines)
+            {
+                Landmine landmine = mine as Landmine;
+                if (landmine != null && !landmine.hasExploded)
+                    landmine.ToggleMine(!anyArmed);
             }
         }
 
-        private void ProcessTrollAction(int action, int payload)
+        private void ToggleAllTurrets()
         {
-            if (action == 13)
-                ToggleHorn(false);
-            else if (action == 14)
-                InvokeAny(FindOne("ShipLights"), "ToggleShipLights");
-            else if (action == 15)
+            UnityEngine.Object[] turrets = FindAll("Turret");
+            bool anyActive = false;
+            foreach (UnityEngine.Object loaded in turrets)
             {
-                UnityEngine.Object breaker = FindOne("BreakerBox");
-                if (RoundManager.Instance != null)
+                Turret turret = loaded as Turret;
+                anyActive = anyActive || (turret != null && turret.turretActive);
+            }
+            foreach (UnityEngine.Object loaded in turrets)
+            {
+                Turret turret = loaded as Turret;
+                if (turret != null)
+                    turret.ToggleTurretEnabled(!anyActive);
+            }
+        }
+
+        private void BerserkAllTurrets()
+        {
+            PlayerControllerB local = LocalPlayer();
+            int playerId = local == null ? -1 : (int)local.playerClientId;
+            foreach (UnityEngine.Object loaded in FindAll("Turret"))
+            {
+                Turret turret = loaded as Turret;
+                if (turret != null)
+                    turret.EnterBerserkModeServerRpc(playerId);
+            }
+        }
+
+        private void ToggleFacilityPower()
+        {
+            BreakerBox breaker = FindOne("BreakerBox") as BreakerBox;
+            PlayerControllerB local = LocalPlayer();
+            if (breaker == null || RoundManager.Instance == null || local == null || !local.IsHost)
+            {
+                ReportActionFailure(
+                    "Facility power needs you to host on a moon with a breaker box");
+                return;
+            }
+            RoundManager.Instance.powerOffPermanently = false;
+            RoundManager.Instance.SwitchPower(!breaker.isPowerOn);
+        }
+
+        private void SetHearEveryone(bool enabled)
+        {
+            hearEveryone = enabled;
+            if (!enabled && StartOfRound.Instance != null)
+                StartOfRound.Instance.UpdatePlayerVoiceEffects();
+            Debug.Log("[Kue] Hear everyone " + enabled);
+        }
+
+        private void UpdateHearEveryone()
+        {
+            if (!hearEveryone)
+                return;
+            StartOfRound round = StartOfRound.Instance;
+            PlayerControllerB local = LocalPlayer();
+            if (round == null || local == null || round.allPlayerScripts == null)
+                return;
+            foreach (PlayerControllerB player in round.allPlayerScripts)
+            {
+                if (player == null || player == local ||
+                    (!player.isPlayerControlled && !player.isPlayerDead))
+                    continue;
+                AudioSource voice = player.currentVoiceChatAudioSource;
+                object voiceState = GetMember(player, "voicePlayerState");
+                if (voice == null || voiceState == null)
+                    continue;
+                voice.spatialBlend = 0f;
+                voice.panStereo = 0f;
+                if (player.currentVoiceChatIngameSettings != null)
+                    player.currentVoiceChatIngameSettings.set2D = true;
+                SetMember(voiceState, "Volume", 1f);
+                AudioLowPassFilter lowPass = voice.GetComponent<AudioLowPassFilter>();
+                if (lowPass != null && lowPass.enabled)
+                    lowPass.enabled = false;
+                AudioHighPassFilter highPass = voice.GetComponent<AudioHighPassFilter>();
+                if (highPass != null && highPass.enabled)
+                    highPass.enabled = false;
+            }
+        }
+
+        private static string HazardName(string assetName)
+        {
+            string name = assetName;
+            foreach (string suffix in HazardNameSuffixes)
+                if (name.Length > suffix.Length &&
+                    name.EndsWith(suffix, StringComparison.OrdinalIgnoreCase))
+                    name = name.Substring(0, name.Length - suffix.Length);
+            System.Text.StringBuilder spaced = new System.Text.StringBuilder(name.Length + 8);
+            for (int i = 0; i < name.Length; i++)
+            {
+                if (i > 0 && char.IsUpper(name[i]) && char.IsLower(name[i - 1]))
+                    spaced.Append(' ');
+                spaced.Append(name[i]);
+            }
+            return spaced.ToString().Trim();
+        }
+
+        private void AddHazardPrefab(GameObject prefab, string assetName)
+        {
+            if (prefab == null || string.IsNullOrEmpty(assetName) ||
+                prefab.GetComponent<NetworkObject>() == null ||
+                !catalogInstanceIds.Add(prefab.GetInstanceID()))
+                return;
+            hazardCatalogBuffer.Add(prefab);
+            hazardNameBuffer.Add(HazardName(assetName));
+        }
+
+        private void RefreshHazardCatalog()
+        {
+            if (hazardCatalogReady)
+                return;
+            IndoorMapHazardType[] indoor = Resources.FindObjectsOfTypeAll<IndoorMapHazardType>();
+            SpawnableOutsideObject[] outdoor =
+                Resources.FindObjectsOfTypeAll<SpawnableOutsideObject>();
+            hazardCatalogSignature = indoor.Length * 65536 + outdoor.Length;
+            hazardCatalogBuffer.Clear();
+            hazardNameBuffer.Clear();
+            catalogInstanceIds.Clear();
+            foreach (IndoorMapHazardType hazard in indoor)
+                if (hazard != null)
+                    AddHazardPrefab(hazard.prefabToSpawn, hazard.name);
+            foreach (SpawnableOutsideObject hazard in outdoor)
+                if (hazard != null)
+                    AddHazardPrefab(hazard.prefabToSpawn, hazard.name);
+            if (hazardCatalogBuffer.Count == 0)
+                return;
+            CatalogBeginResult begin = NativeBridge.BeginHazardCatalog();
+            if (begin != CatalogBeginResult.Begun)
+            {
+                Debug.LogError("[Kue] Runtime trap catalog begin failed: " + begin);
+                return;
+            }
+            usedCatalogNames.Clear();
+            for (int i = 0; i < hazardCatalogBuffer.Count; i++)
+            {
+                CatalogReportResult report = NativeBridge.ReportHazardType(
+                    hazardCatalogBuffer[i].GetInstanceID(), UniqueCatalogName(hazardNameBuffer[i]));
+                if (report != CatalogReportResult.Recorded)
                 {
-                    RoundManager.Instance.powerOffPermanently = false;
-                    RoundManager.Instance.SwitchPower(!BoolMember(breaker, "isPowerOn", true));
+                    NativeBridge.AbortHazardCatalog();
+                    Debug.LogError("[Kue] Runtime trap catalog report failed at " + i + ": " +
+                                   report);
+                    return;
                 }
             }
-            else if (action == 16)
+            CatalogCommitResult commit = NativeBridge.CommitHazardCatalog();
+            if (commit != CatalogCommitResult.Committed && commit != CatalogCommitResult.Unchanged)
+            {
+                Debug.LogError("[Kue] Runtime trap catalog commit failed: " + commit);
+                return;
+            }
+            hazardCatalog.Clear();
+            hazardCatalog.AddRange(hazardCatalogBuffer);
+            hazardCatalogReady = true;
+            Debug.Log("[Kue] Runtime trap catalog: " + hazardCatalog.Count + " installed types");
+        }
+
+        private void SpawnHazardAtPlayerManaged(int index, int count, int clientId, int distance)
+        {
+            PlayerControllerB target = PlayerByClientId(clientId);
+            PlayerControllerB local = LocalPlayer();
+            RoundManager manager = RoundManager.Instance;
+            if (target == null || local == null || index < 0 || index >= hazardCatalog.Count)
+            {
+                ReportActionFailure("Trap spawn failed: target or type unavailable");
+                return;
+            }
+            if (!local.IsHost)
+            {
+                ReportActionFailure("Only the host can create traps");
+                return;
+            }
+            if (manager == null || manager.mapPropsContainer == null)
+            {
+                ReportActionFailure("Trap spawn failed: land on a moon first");
+                return;
+            }
+            GameObject prefab = hazardCatalog[index];
+            int spawned = 0;
+            for (int i = 0; i < Mathf.Clamp(count, 1, MaximumSpawnCount); i++)
+            {
+                GameObject hazard =
+                    Instantiate(prefab, SpotNearPlayer(target, distance),
+                                Quaternion.Euler(0f, UnityEngine.Random.Range(0f, 360f), 0f),
+                                manager.mapPropsContainer.transform);
+                NetworkObject networkObject = hazard.GetComponent<NetworkObject>();
+                if (networkObject == null)
+                {
+                    Destroy(hazard);
+                    continue;
+                }
+                networkObject.Spawn(true);
+                spawned++;
+            }
+            Debug.Log("[Kue] Placed " + spawned + " x " + prefab.name + " near " +
+                      target.playerUsername);
+            ShowTip("Placed " + spawned + " traps near " + target.playerUsername);
+        }
+
+        private bool PreviewsSupported()
+        {
+            if (previewUnavailable)
+                return false;
+            if (previewTextureShader != null && previewDepthMaterial != null)
+                return true;
+            previewTextureShader = Shader.Find("UI/Default");
+            Shader depthShader = Shader.Find("Hidden/Internal-Colored");
+            if (previewTextureShader == null || depthShader == null)
+            {
+                previewUnavailable = true;
+                Debug.Log("[Kue] Model previews unavailable: built-in shaders missing");
+                return false;
+            }
+            previewDepthMaterial =
+                new Material(depthShader) { hideFlags = HideFlags.HideAndDontSave };
+            previewDepthMaterial.SetColor("_Color", PreviewUntexturedColor);
+            previewDepthMaterial.SetInt("_SrcBlend", (int)BlendMode.One);
+            previewDepthMaterial.SetInt("_DstBlend", (int)BlendMode.Zero);
+            previewDepthMaterial.SetInt("_ZWrite", 1);
+            previewDepthMaterial.SetInt("_ZTest", (int)CompareFunction.LessEqual);
+            previewDepthMaterial.SetInt("_Cull", (int)CullMode.Off);
+            previewCommands = new CommandBuffer { name = "Kue.ModelPreview" };
+            return true;
+        }
+
+        private GameObject PreviewPrefab(int kind, int index)
+        {
+            if (index < 0)
+                return null;
+            switch (kind)
+            {
+            case PreviewKindEnemy:
+                return index < enemyCatalog.Count && enemyCatalog[index] != null
+                           ? enemyCatalog[index].enemyPrefab
+                           : null;
+            case PreviewKindItem:
+                return index < itemCatalog.Count && itemCatalog[index] != null
+                           ? itemCatalog[index].spawnPrefab
+                           : null;
+            case PreviewKindTrap:
+                return index < hazardCatalog.Count ? hazardCatalog[index] : null;
+            default:
+                return null;
+            }
+        }
+
+        private static bool ActiveWithin(Transform part, Transform root)
+        {
+            for (Transform current = part; current != null; current = current.parent)
+            {
+                if (!current.gameObject.activeSelf)
+                    return false;
+                if (current == root)
+                    return true;
+            }
+            return true;
+        }
+
+        private static Bounds TransformedBounds(Bounds bounds, Matrix4x4 matrix)
+        {
+            Vector3 center = matrix.MultiplyPoint3x4(bounds.center);
+            Vector3 extents = bounds.extents;
+            Vector3 axisX = matrix.MultiplyVector(new Vector3(extents.x, 0f, 0f));
+            Vector3 axisY = matrix.MultiplyVector(new Vector3(0f, extents.y, 0f));
+            Vector3 axisZ = matrix.MultiplyVector(new Vector3(0f, 0f, extents.z));
+            Vector3 size =
+                new Vector3(Mathf.Abs(axisX.x) + Mathf.Abs(axisY.x) + Mathf.Abs(axisZ.x),
+                            Mathf.Abs(axisX.y) + Mathf.Abs(axisY.y) + Mathf.Abs(axisZ.y),
+                            Mathf.Abs(axisX.z) + Mathf.Abs(axisY.z) + Mathf.Abs(axisZ.z));
+            return new Bounds(center, size * 2f);
+        }
+
+        private Material[] PreviewMaterials(Material[] sources, int submeshCount)
+        {
+            Material[] materials = new Material[submeshCount];
+            for (int i = 0; i < submeshCount; i++)
+            {
+                Material source = sources != null && sources.Length > 0
+                                      ? sources[Mathf.Min(i, sources.Length - 1)]
+                                      : null;
+                Texture texture = null;
+                Color tint = Color.white;
+                if (source != null)
+                {
+                    if (source.HasProperty("_BaseColorMap"))
+                        texture = source.GetTexture("_BaseColorMap");
+                    else if (source.HasProperty("_MainTex"))
+                        texture = source.GetTexture("_MainTex");
+                    if (source.HasProperty("_BaseColor"))
+                        tint = source.GetColor("_BaseColor");
+                    else if (source.HasProperty("_Color"))
+                        tint = source.GetColor("_Color");
+                }
+                tint.a = 1f;
+                Material material =
+                    new Material(previewTextureShader) { hideFlags = HideFlags.HideAndDontSave };
+                if (texture != null)
+                    material.SetTexture("_MainTex", texture);
+                material.SetColor("_Color", tint);
+                materials[i] = material;
+            }
+            return materials;
+        }
+
+        private void ReleasePreviewModel()
+        {
+            foreach (PreviewPart part in previewParts)
+            {
+                if (part.ownsMesh && part.mesh != null)
+                    Destroy(part.mesh);
+                foreach (Material material in part.materials)
+                    if (material != null)
+                        Destroy(material);
+            }
+            previewParts.Clear();
+            previewPrefab = null;
+        }
+
+        private void ReleasePreview()
+        {
+            ReleasePreviewModel();
+            previewVisible = false;
+            if (previewTexture != null)
+            {
+                previewTexture.Release();
+                Destroy(previewTexture);
+                previewTexture = null;
+            }
+            if (previewHolder != null)
+            {
+                Destroy(previewHolder);
+                previewHolder = null;
+            }
+        }
+
+        private void BuildPreviewModel(GameObject prefab)
+        {
+            ReleasePreviewModel();
+            previewPrefab = prefab;
+            if (previewHolder == null)
+            {
+                previewHolder = new GameObject("Kue.ModelPreview");
+                previewHolder.hideFlags = HideFlags.HideAndDontSave;
+                previewHolder.SetActive(false);
+                DontDestroyOnLoad(previewHolder);
+            }
+            GameObject clone = Instantiate(prefab, previewHolder.transform);
+            try
+            {
+                clone.transform.localPosition = Vector3.zero;
+                clone.transform.localRotation = Quaternion.identity;
+                int visibleLayers = PlayerVisibleLayers(GameCamera());
+                bool hasBounds = false;
+                foreach (Renderer renderer in HighestDetailRenderers(clone.transform))
+                {
+                    if (!ModelRenderer(renderer, visibleLayers) ||
+                        !ActiveWithin(renderer.transform, clone.transform))
+                        continue;
+                    Mesh mesh = null;
+                    bool ownsMesh = false;
+                    SkinnedMeshRenderer skinned = renderer as SkinnedMeshRenderer;
+                    if (skinned != null && skinned.sharedMesh != null)
+                    {
+                        mesh = new Mesh { hideFlags = HideFlags.HideAndDontSave };
+                        skinned.BakeMesh(mesh, true);
+                        ownsMesh = true;
+                        if (mesh.vertexCount == 0)
+                        {
+                            Destroy(mesh);
+                            mesh = skinned.sharedMesh;
+                            ownsMesh = false;
+                        }
+                    }
+                    else if (renderer is MeshRenderer)
+                    {
+                        MeshFilter filter = renderer.GetComponent<MeshFilter>();
+                        mesh = filter != null ? filter.sharedMesh : null;
+                    }
+                    if (mesh == null || mesh.vertexCount == 0)
+                        continue;
+                    PreviewPart part =
+                        new PreviewPart { mesh = mesh, ownsMesh = ownsMesh,
+                                          matrix = renderer.transform.localToWorldMatrix,
+                                          materials = PreviewMaterials(renderer.sharedMaterials,
+                                                                       mesh.subMeshCount) };
+                    Bounds bounds = TransformedBounds(mesh.bounds, part.matrix);
+                    if (hasBounds)
+                        previewBounds.Encapsulate(bounds);
+                    else
+                        previewBounds = bounds;
+                    hasBounds = true;
+                    previewParts.Add(part);
+                }
+            }
+            finally
+            {
+                DestroyImmediate(clone);
+            }
+        }
+
+        private void RenderPreview(int width, int height)
+        {
+            if (previewTexture == null || previewTexture.width != width ||
+                previewTexture.height != height)
+            {
+                if (previewTexture != null)
+                {
+                    previewTexture.Release();
+                    Destroy(previewTexture);
+                }
+                previewTexture = new RenderTexture(width, height, 24, RenderTextureFormat.ARGB32) {
+                    hideFlags = HideFlags.HideAndDontSave, antiAliasing = 4
+                };
+                previewTexture.Create();
+            }
+            Vector3 center = previewBounds.center;
+            float radius = Mathf.Max(previewBounds.extents.magnitude, 0.05f);
+            float aspect = (float)width / height;
+            float halfAngle = PreviewFieldOfView * 0.5f * Mathf.Deg2Rad;
+            float distance = radius / Mathf.Sin(halfAngle) / Mathf.Min(1f, aspect) * 1.05f;
+            Vector3 eye = center + new Vector3(0f, 0.22f, 1f).normalized *distance;
+            Matrix4x4 view =
+                Matrix4x4.Scale(new Vector3(1f, 1f, -1f)) *
+                Matrix4x4.TRS(eye, Quaternion.LookRotation(center - eye, Vector3.up), Vector3.one)
+                    .inverse;
+            Matrix4x4 projection = Matrix4x4.Perspective(PreviewFieldOfView, aspect,
+                                                         Mathf.Max(0.01f, distance - radius * 1.5f),
+                                                         distance + radius * 1.5f);
+            Matrix4x4 spin =
+                Matrix4x4.Translate(center) *
+                Matrix4x4.Rotate(Quaternion.Euler(0f, Time.unscaledTime * PreviewSpinDegrees, 0f)) *
+                Matrix4x4.Translate(-center);
+            Color background = QualitySettings.activeColorSpace == ColorSpace.Linear
+                                   ? PreviewBackground.linear
+                                   : PreviewBackground;
+            float guiDepthTest = Shader.GetGlobalFloat(GuiDepthTestId);
+            CommandBuffer commands = previewCommands;
+            commands.Clear();
+            commands.SetRenderTarget(previewTexture);
+            commands.ClearRenderTarget(true, true, background);
+            commands.SetViewProjectionMatrices(view, projection);
+            foreach (PreviewPart part in previewParts)
+                for (int submesh = 0; submesh < part.materials.Length; submesh++)
+                    commands.DrawMesh(part.mesh, spin * part.matrix, previewDepthMaterial, submesh,
+                                      0);
+            commands.SetGlobalFloat(GuiDepthTestId, (float)CompareFunction.LessEqual);
+            foreach (PreviewPart part in previewParts)
+                for (int submesh = 0; submesh < part.materials.Length; submesh++)
+                    commands.DrawMesh(part.mesh, spin * part.matrix, part.materials[submesh],
+                                      submesh, 0);
+            commands.SetGlobalFloat(GuiDepthTestId, guiDepthTest);
+            RenderTexture active = RenderTexture.active;
+            Graphics.ExecuteCommandBuffer(commands);
+            RenderTexture.active = active;
+        }
+
+        private void UpdatePreview()
+        {
+            previewVisible = false;
+            if (!menuOpen || !PreviewsSupported())
+                return;
+            int kind;
+            int index;
+            int x;
+            int y;
+            int width;
+            int height;
+            if (NativeBridge.GetPreviewRequest(out kind, out index, out x, out y, out width,
+                                               out height) == 0 ||
+                width <= 0 || height <= 0)
+                return;
+            try
+            {
+                GameObject prefab = PreviewPrefab(kind, index);
+                if (prefab == null)
+                    return;
+                if (prefab != previewPrefab)
+                    BuildPreviewModel(prefab);
+                if (previewParts.Count == 0)
+                    return;
+                RenderPreview(width, height);
+                previewRect = new Rect(x, y, width, height);
+                previewVisible = true;
+            }
+            catch (Exception e)
+            {
+                previewUnavailable = true;
+                ReleasePreview();
+                Debug.LogError("[Kue] Model previews disabled: " + e);
+            }
+        }
+
+        private static int Bit(SessionSwitch flag)
+        {
+            return 1 << (int)flag;
+        }
+
+        private static int Bit(WorldFeature flag)
+        {
+            return 1 << (int)flag;
+        }
+
+        private void ScanWorld()
+        {
+            int world = 0;
+            int switches = 0;
+            long inFacility = 0;
+            StartOfRound round = StartOfRound.Instance;
+            RoundManager manager = RoundManager.Instance;
+            PlayerControllerB local = LocalPlayer();
+            bool host = local != null && local.IsHost;
+            bool orbit = round != null && round.inShipPhase && !round.travellingToNewLevel;
+            bool moonLoaded = round != null && manager != null && !round.inShipPhase &&
+                              manager.mapPropsContainer != null;
+            if (host)
+                world |= Bit(WorldFeature.Host);
+            if (orbit)
+                world |= Bit(WorldFeature.ShipInOrbit);
+            if (moonLoaded)
+                world |= Bit(WorldFeature.MoonLoaded);
+            if (round != null && round.allowLocalPlayerDeath && round.shipDoorsEnabled &&
+                round.timeSinceRoundStarted >= MinimumLocalDeathRoundTime)
+                world |= Bit(WorldFeature.PlayersCanDie);
+            if (livingEnemyCount > 0)
+                world |= Bit(WorldFeature.EnemiesAlive);
+            if (round != null && round.allPlayerScripts != null)
+                foreach (PlayerControllerB player in round.allPlayerScripts)
+                    if (RealPlayer(player) && player.isInsideFactory && player.playerClientId < 64)
+                        inFacility |= 1L << (int)player.playerClientId;
+
+            if (FindOne("ShipAlarmCord") != null)
+                world |= Bit(WorldFeature.ShipHorn);
+            ShipLights lights = FindOne("ShipLights") as ShipLights;
+            if (lights != null)
+            {
+                world |= Bit(WorldFeature.ShipLights);
+                if (lights.areLightsOn)
+                    switches |= Bit(SessionSwitch.ShipLights);
+            }
+            if (FindOne("Terminal") != null)
+                world |= Bit(WorldFeature.Terminal);
+            if (FindOne("HangarShipDoor") != null)
+                world |= Bit(WorldFeature.ShipDoor);
+            foreach (UnityEngine.Object trigger in FindAll("AnimatedObjectTrigger"))
+                if (PlushieTrigger(trigger))
+                {
+                    world |= Bit(WorldFeature.Plushie);
+                    break;
+                }
+            if (FindAll("VehicleController").Length > 0)
+            {
+                world |= Bit(WorldFeature.Cruiser);
+                if (round != null && round.magnetOn)
+                    switches |= Bit(SessionSwitch.CruiserMagnet);
+            }
+            if (FindOne("DepositItemsDesk") != null)
+                world |= Bit(WorldFeature.CompanyDesk);
+            foreach (UnityEngine.Object mine in FindAll("Landmine"))
+            {
+                Landmine landmine = mine as Landmine;
+                if (landmine == null || landmine.hasExploded)
+                    continue;
+                world |= Bit(WorldFeature.Landmines);
+                if (BoolMember(mine, "mineActivated", false))
+                    switches |= Bit(SessionSwitch.LandminesArmed);
+            }
+            foreach (UnityEngine.Object loaded in FindAll("Turret"))
+            {
+                Turret turret = loaded as Turret;
+                if (turret == null)
+                    continue;
+                world |= Bit(WorldFeature.Turrets);
+                if (turret.turretActive)
+                    switches |= Bit(SessionSwitch.TurretsActive);
+            }
+            BreakerBox breaker = FindOne("BreakerBox") as BreakerBox;
+            if (moonLoaded && breaker != null)
+            {
+                world |= Bit(WorldFeature.FacilityPower);
+                if (breaker.isPowerOn)
+                    switches |= Bit(SessionSwitch.FacilityPower);
+            }
+            UnityEngine.Object mainBridge = FindOne("BridgeTrigger");
+            if (mainBridge != null && !BoolMember(mainBridge, "hasBridgeFallen", false))
+                world |= Bit(WorldFeature.MainBridge);
+            UnityEngine.Object smallBridge = FindOne("BridgeTriggerType2");
+            if (smallBridge != null && !BoolMember(smallBridge, "bridgeFell", false))
+                world |= Bit(WorldFeature.SmallBridge);
+            if (FindOne("MineshaftElevatorController") != null)
+                world |= Bit(WorldFeature.MineshaftElevator);
+            if (FindAll("ShotgunItem").Length > 0)
+                world |= Bit(WorldFeature.Shotguns);
+            if (FindAll("JetpackItem").Length > 0)
+                world |= Bit(WorldFeature.Jetpacks);
+            foreach (UnityEngine.Object mask in FindAll("HauntedMaskItem"))
+                if (MaskCanBecomeMasked(mask, host))
+                {
+                    world |= Bit(WorldFeature.HauntedMasks);
+                    break;
+                }
+            if (moonLoaded && manager.insideAINodes != null && manager.insideAINodes.Length > 0 &&
+                HoardingBugRushIndex() >= 0)
+                world |= Bit(WorldFeature.HoardingBugNest);
+            if (PreviewsSupported())
+                world |= Bit(WorldFeature.ModelPreviews);
+            scannedWorld = world;
+            scannedSwitches = switches;
+            scannedPlayersInFacility = inFacility;
+        }
+
+        private void ReportSession()
+        {
+            if (!menuOpen)
+                return;
+            if (Time.unscaledTime >= nextWorldScan)
+            {
+                nextWorldScan = Time.unscaledTime + 0.5f;
+                ScanWorld();
+            }
+            int switches = scannedSwitches;
+            if (flyEnabled)
+                switches |= Bit(SessionSwitch.Fly);
+            if (thirdPersonEnabled)
+                switches |= Bit(SessionSwitch.ThirdPerson);
+            if (slideTaunt)
+                switches |= Bit(SessionSwitch.EmoteWhileMoving);
+            if (hearEveryone)
+                switches |= Bit(SessionSwitch.HearEveryone);
+            if (shipHornEnabled)
+                switches |= Bit(SessionSwitch.ShipHorn);
+            if (terminalSpamEnabled)
+                switches |= Bit(SessionSwitch.TerminalSound);
+            if (openShipDoorSpace)
+                switches |= Bit(SessionSwitch.ShipDoorButtons);
+            if (pjManSpam)
+                switches |= Bit(SessionSwitch.PlushieSpam);
+            if (carHornEnabled)
+                switches |= Bit(SessionSwitch.CruiserHorn);
+            if (depositSpamEnabled)
+                switches |= Bit(SessionSwitch.DeskDoorSound);
+            if (shotgunSpamEnabled)
+                switches |= Bit(SessionSwitch.ShotgunSpam);
+            if (explodeJetpacksOnGrab)
+                switches |= Bit(SessionSwitch.JetpackTrap);
+            int secondsLeft = -1;
+            if (lureClientId >= 0 && !lureRelentless)
+                secondsLeft = Mathf.Max(0, Mathf.CeilToInt(lureEndsAt - Time.unscaledTime));
+            NativeBridge.ReportSessionState(switches, scannedWorld, scannedPlayersInFacility,
+                                            lureClientId, secondsLeft);
+        }
+
+        private void RunAction(PlayerAction action, int clientId, int catalogIndex, int count,
+                               int amount)
+        {
+            switch (action)
+            {
+            case PlayerAction.TeleportTo:
+                TeleportToPlayerManaged(PlayerByClientId(clientId));
+                break;
+            case PlayerAction.Kill:
+                KillPlayerManaged(PlayerByClientId(clientId));
+                break;
+            case PlayerAction.HealSelf:
+                HealSelfManaged();
+                break;
+            case PlayerAction.KillAll:
+            case PlayerAction.KillAllExceptLocal:
+            {
+                PlayerControllerB local = LocalPlayer();
+                foreach (PlayerControllerB player in StartOfRound.Instance.allPlayerScripts)
+                    if (RealPlayer(player) && player != local)
+                        KillPlayerManaged(player);
+                if (action == PlayerAction.KillAll)
+                    QueueLocalKill(local);
+                break;
+            }
+            case PlayerAction.LureAllEnemies:
+                ToggleLure(clientId, false);
+                break;
+            case PlayerAction.TogglePersistentLure:
+                ToggleLure(clientId, true);
+                break;
+            case PlayerAction.TeleportAllEnemies:
+                TeleportAllEnemiesManaged(PlayerByClientId(clientId));
+                break;
+            case PlayerAction.SpawnEnemy:
+                SpawnEnemyManaged(catalogIndex, count);
+                break;
+            case PlayerAction.SpawnEnemyAtPlayer:
+                SpawnEnemyAtPlayerManaged(catalogIndex, count, clientId, amount);
+                break;
+            case PlayerAction.SummonEnemyTypeAtPlayer:
+                SummonEnemyTypeAtPlayerManaged(catalogIndex, count, clientId, amount);
+                break;
+            case PlayerAction.SpawnHazardAtPlayer:
+                SpawnHazardAtPlayerManaged(catalogIndex, count, clientId, amount);
+                break;
+            case PlayerAction.KillAllEnemies:
+                KillAllEnemiesManaged();
+                break;
+            case PlayerAction.StunAllEnemies:
+                StunAllEnemiesManaged();
+                break;
+            case PlayerAction.SpawnItemAtPlayer:
+                SpawnItemAtPlayerManaged(catalogIndex, count, clientId, amount);
+                break;
+            case PlayerAction.TeleportItemsToPlayer:
+                TeleportItemsToPlayerManaged(PlayerByClientId(clientId));
+                break;
+            case PlayerAction.DepositShipScrap:
+                DepositShipScrapManaged();
+                break;
+            case PlayerAction.AddTerminalCredits:
+                AddTerminalCreditsManaged(amount);
+                break;
+            case PlayerAction.TravelToMoon:
+                TravelToMoonManaged(catalogIndex);
+                break;
+            case PlayerAction.ClearInsanity:
+                SetPlayerInsanityManaged(PlayerByClientId(clientId), false);
+                break;
+            case PlayerAction.MaxInsanity:
+                SetPlayerInsanityManaged(PlayerByClientId(clientId), true);
+                break;
+            case PlayerAction.ToggleFly:
+                SetFly(!flyEnabled);
+                break;
+            case PlayerAction.ToggleThirdPerson:
+                SetThirdPerson(!thirdPersonEnabled);
+                break;
+            case PlayerAction.ToggleHearEveryone:
+                SetHearEveryone(!hearEveryone);
+                break;
+            case PlayerAction.SlideTaunt:
+                slideTaunt = !slideTaunt;
+                break;
+            case PlayerAction.ToggleShipHorn:
+                ToggleShipHorn();
+                break;
+            case PlayerAction.ToggleCarHorn:
+                ToggleCruiserHorn();
+                break;
+            case PlayerAction.ToggleShipLights:
+                InvokeAny(FindOne("ShipLights"), "ToggleShipLights");
+                break;
+            case PlayerAction.ToggleTerminalSound:
+                terminalSpamEnabled = !terminalSpamEnabled;
+                break;
+            case PlayerAction.ToggleDepositDeskSound:
+                depositSpamEnabled = !depositSpamEnabled;
+                break;
+            case PlayerAction.OpenShipDoorSpace:
+                openShipDoorSpace = !openShipDoorSpace;
+                break;
+            case PlayerAction.ToggleVehicleMagnet:
+                StartOfRound.Instance.SetMagnetOnServerRpc(!StartOfRound.Instance.magnetOn);
+                break;
+            case PlayerAction.TogglePjManSpam:
+                pjManSpamInterval = Mathf.Clamp(amount / 1000f, 0f, 1f);
+                pjManSpam = !pjManSpam;
+                nextPjManPulse = 0f;
+                break;
+            case PlayerAction.EjectEveryone:
+                ForceEjectEveryoneManaged();
+                break;
+            case PlayerAction.ExplodeCruiser:
+                foreach (UnityEngine.Object cruiser in FindAll("VehicleController"))
+                    InvokeAny(cruiser, "DestroyCarServerRpc", -1);
+                break;
+            case PlayerAction.ForceTentacleAttack:
+                ForceTentacleAttackManaged();
+                break;
+            case PlayerAction.ToggleAllMines:
+                ToggleAllMines();
+                break;
+            case PlayerAction.BlowUpAllMines:
                 foreach (UnityEngine.Object mine in FindAll("Landmine"))
                     InvokeAny(mine, "ExplodeMineServerRpc");
-            else if (action == 17)
-            {
-                minesEnabled = !minesEnabled;
-                foreach (UnityEngine.Object mine in FindAll("Landmine"))
-                    InvokeAny(mine, "ToggleMine", minesEnabled);
-            }
-            else if (action == 18)
-            {
-                turretsEnabled = !turretsEnabled;
-                foreach (UnityEngine.Object turret in FindAll("Turret"))
-                    InvokeAny(turret, "ToggleTurretEnabled", turretsEnabled);
-            }
-            else if (action == 19)
-            {
-                turretsBerserk = !turretsBerserk;
-                foreach (UnityEngine.Object turret in FindAll("Turret"))
-                {
-                    if (turretsBerserk)
-                        InvokeAny(turret, "EnterBerserkModeServerRpc",
-                                  LocalPlayer() == null ? -1 : (int)LocalPlayer().playerClientId);
-                    else
-                        InvokeAny(turret, "ToggleTurretEnabled", false);
-                }
-            }
-            else if (action == 20)
-                openShipDoorSpace = !openShipDoorSpace;
-            else if (action == 21)
-                ForceTentacleAttackManaged();
-            else if (action == 45)
-                DepositShipScrapManaged();
-            else if (action == 46)
-                AddTerminalCreditsManaged(payload);
-            else if (action == 47)
-                SetThirdPerson(!thirdPersonEnabled);
-            else if (action == 48)
-                TravelToMoonManaged(payload);
-            else if (action == 22)
-                SpawnMaskedManaged();
-            else if (action == 23)
-                ForceEjectEveryoneManaged();
-            else if (action == 24)
-            {
-                int catalogIndex;
-                if (!enemyCatalogNames.TryGetValue("Hoarding bug", out catalogIndex))
-                    catalogIndex = -1;
-                int rushIndex = -1;
-                if (RoundManager.Instance != null && RoundManager.Instance.currentLevel != null)
-                {
-                    List<SpawnableEnemyWithRarity> enemies =
-                        RoundManager.Instance.currentLevel.Enemies;
-                    for (int i = 0; i < enemies.Count; i++)
-                        if (enemies[i] != null && enemies[i].enemyType != null &&
-                            string.Equals(enemies[i].enemyType.enemyName, "Hoarding bug",
-                                          StringComparison.OrdinalIgnoreCase))
-                        {
-                            rushIndex = i;
-                            break;
-                        }
-                }
-                if (rushIndex >= 0)
-                {
-                    SetMember(RoundManager.Instance, "enemyRushIndex", rushIndex);
-                    RoundManager.Instance.currentMaxInsidePower = 30f;
-                    if (catalogIndex >= 0)
-                        SpawnEnemyManaged(catalogIndex | (1 << 16));
-                }
-                else if (HUDManager.Instance != null)
-                    HUDManager.Instance.DisplayTip(
-                        "Kue", "This moon has no Hoarding bug in its indoor spawn table");
-            }
-            else if (action == 25)
-            {
-                UnityEngine.Object elevator = FindOne("MineshaftElevatorController");
-                InvokeAny(elevator, "PressElevatorButtonServerRpc");
-            }
-            else if (action == 26 && StartOfRound.Instance != null)
-                StartOfRound.Instance.SetMagnetOnServerRpc(!StartOfRound.Instance.magnetOn);
-            else if (action == 27)
-                ShootAllShotgunsManaged();
-            else if (action == 28)
-                shotgunSpamEnabled = !shotgunSpamEnabled;
-            else if (action == 29)
-                foreach (UnityEngine.Object vehicle in FindAll("VehicleController"))
-                    InvokeAny(vehicle, "DestroyCarServerRpc", -1);
-            else if (action == 30)
-                slideTaunt = !slideTaunt;
-            else if (action == 31)
-                ExplodeAllJetpacksManaged(false);
-            else if (action == 32)
-                explodeJetpacksOnGrab = !explodeJetpacksOnGrab;
-            else if (action == 33)
+                break;
+            case PlayerAction.ToggleAllTurrets:
+                ToggleAllTurrets();
+                break;
+            case PlayerAction.BerserkAllTurrets:
+                BerserkAllTurrets();
+                break;
+            case PlayerAction.ToggleFactoryLights:
+                ToggleFacilityPower();
+                break;
+            case PlayerAction.ForceBridgeFall:
             {
                 UnityEngine.Object bridge = FindOne("BridgeTrigger");
                 if (TakeOwnership(bridge))
                     InvokeAny(bridge, "BridgeFallServerRpc");
+                break;
             }
-            else if (action == 34)
+            case PlayerAction.ForceSmallBridgeFall:
             {
                 UnityEngine.Object bridge = FindOne("BridgeTriggerType2");
                 for (int i = 0; i < 4; i++)
                     InvokeAny(bridge, "AddToBridgeInstabilityServerRpc");
+                break;
             }
-            else if (action == 35)
-                terminalSpamEnabled = !terminalSpamEnabled;
-            else if (action == 36)
-                depositSpamEnabled = !depositSpamEnabled;
-            else if (action == 37)
-                ToggleHorn(true);
-            else if (action == 38)
-            {
-                pjManSpamInterval = Mathf.Clamp(payload / 1000f, 0f, 1f);
-                pjManSpam = !pjManSpam;
-                nextPjManPulse = 0f;
+            case PlayerAction.ToggleMineshaftElevator:
+                InvokeAny(FindOne("MineshaftElevatorController"), "PressElevatorButtonServerRpc");
+                break;
+            case PlayerAction.SpawnHoardingBugInfestation:
+                StartHoardingBugInfestation();
+                break;
+            case PlayerAction.ShootAllShotguns:
+                ShootAllShotgunsManaged();
+                break;
+            case PlayerAction.ToggleShotgunSpam:
+                shotgunSpamEnabled = !shotgunSpamEnabled;
+                break;
+            case PlayerAction.ExplodeAllJetpacks:
+                ExplodeAllJetpacksManaged(false);
+                break;
+            case PlayerAction.ToggleExplodeJetpacksOnGrab:
+                explodeJetpacksOnGrab = !explodeJetpacksOnGrab;
+                break;
+            case PlayerAction.SpawnMaskedEnemy:
+                SpawnMaskedManaged();
+                break;
+            case PlayerAction.None:
+                break;
             }
         }
 
         private void ProcessManagedActions()
         {
-            int targetClientId;
-            int action;
-            while ((action = NativeBridge.PollAction(out targetClientId)) != 0)
+            int clientId;
+            int catalogIndex;
+            int count;
+            int amount;
+            PlayerAction action;
+            while ((action = NativeBridge.PollAction(out clientId, out catalogIndex, out count,
+                                                     out amount)) != PlayerAction.None)
             {
                 StartOfRound round = StartOfRound.Instance;
                 if (round == null || round.allPlayerScripts == null)
                     continue;
-                if (action == 2)
+                try
                 {
-                    try
-                    {
-                        KillPlayerManaged(PlayerByClientId(targetClientId));
-                    }
-                    catch (Exception e)
-                    {
-                        Debug.LogError("[Kue] Kill failed: " + e);
-                    }
+                    RunAction(action, clientId, catalogIndex, count, amount);
                 }
-                else if (action == 4 || action == 5)
+                catch (Exception e)
                 {
-                    PlayerControllerB local = LocalPlayer();
-
-                    foreach (PlayerControllerB player in round.allPlayerScripts)
-                    {
-                        if (!RealPlayer(player))
-                            continue;
-                        if (player == local)
-                            continue;
-                        try
-                        {
-                            KillPlayerManaged(player);
-                        }
-                        catch (Exception e)
-                        {
-                            Debug.LogError("[Kue] Remote kill failed: " + e);
-                        }
-                    }
-                    if (action == 4)
-                        QueueLocalKill(local);
-                }
-                else if (action == 6)
-                {
-                    PlayerControllerB target = PlayerByClientId(targetClientId);
-                    persistentOwnedEnemies.Clear();
-                    int count = LureEnemiesManaged(target, true);
-                    Debug.Log("[Kue] One-shot lure targeted " + targetClientId + " for " + count +
-                              " enemies");
-                }
-                else if (action == 7)
-                {
-                    try
-                    {
-                        TeleportAllEnemiesManaged(PlayerByClientId(targetClientId));
-                    }
-                    catch (Exception e)
-                    {
-                        Debug.LogError("[Kue] Teleport all enemies failed: " + e);
-                    }
-                }
-                else if (action == 8)
-                {
-                    if (persistentLureClientId == targetClientId)
-                    {
-                        persistentLureClientId = -1;
-                        persistentOwnedEnemies.Clear();
-                        persistentActivatedEnemies.Clear();
-                        persistentEnemies.Clear();
-                    }
-                    else
-                    {
-                        persistentLureClientId = targetClientId;
-                        persistentOwnedEnemies.Clear();
-                        persistentActivatedEnemies.Clear();
-                        persistentEnemies.Clear();
-                        nextPersistentEnemyRefresh = 0f;
-                    }
-                    NativeBridge.ReportPersistentLureTarget(persistentLureClientId);
-                    Debug.Log("[Kue] Persistent lure target=" + persistentLureClientId);
-                }
-                else if (action == 9)
-                {
-                    try
-                    {
-                        SpawnEnemyManaged(targetClientId);
-                    }
-                    catch (Exception e)
-                    {
-                        Debug.LogError("[Kue] Enemy spawn failed: " + e);
-                    }
-                }
-                else if (action == 10)
-                    KillAllEnemiesManaged();
-                else if (action == 11)
-                    StunAllEnemiesManaged();
-                else if (action == 12)
-                    SetFly(!flyEnabled);
-                else if (action == 39)
-                {
-                    try
-                    {
-                        SpawnEnemyAtPlayerManaged(targetClientId);
-                    }
-                    catch (Exception e)
-                    {
-                        Debug.LogError("[Kue] Targeted enemy spawn failed: " + e);
-                    }
-                }
-                else if (action == 40)
-                {
-                    try
-                    {
-                        SpawnItemAtPlayerManaged(targetClientId);
-                    }
-                    catch (Exception e)
-                    {
-                        Debug.LogError("[Kue] Item spawn failed: " + e);
-                    }
-                }
-                else if (action == 41)
-                {
-                    try
-                    {
-                        TeleportItemsToPlayerManaged(PlayerByClientId(targetClientId));
-                    }
-                    catch (Exception e)
-                    {
-                        Debug.LogError("[Kue] Item teleport failed: " + e);
-                    }
-                }
-                else if (action == 42)
-                {
-                    try
-                    {
-                        SummonEnemyTypeAtPlayerManaged(targetClientId);
-                    }
-                    catch (Exception e)
-                    {
-                        Debug.LogError("[Kue] Selected enemy summon failed: " + e);
-                    }
-                }
-                else if (action == 43)
-                {
-                    try
-                    {
-                        SetPlayerInsanityManaged(PlayerByClientId(targetClientId), false);
-                    }
-                    catch (Exception e)
-                    {
-                        Debug.LogError("[Kue] Clear insanity failed: " + e);
-                    }
-                }
-                else if (action == 44)
-                {
-                    try
-                    {
-                        SetPlayerInsanityManaged(PlayerByClientId(targetClientId), true);
-                    }
-                    catch (Exception e)
-                    {
-                        Debug.LogError("[Kue] Max insanity failed: " + e);
-                    }
-                }
-                else if (action >= 13)
-                {
-                    try
-                    {
-                        ProcessTrollAction(action, targetClientId);
-                    }
-                    catch (Exception e)
-                    {
-                        Debug.LogError("[Kue] Troll action failed: " + e);
-                    }
+                    ReportActionFailure(action + " failed: " + e.Message);
+                    Debug.LogError("[Kue] " + action + " failed: " + e);
                 }
             }
         }
@@ -3511,7 +4531,7 @@ namespace Kue.Internal
                                       ? "Player " + id
                                       : player.playerUsername;
                     if (HUDManager.Instance != null)
-                        HUDManager.Instance.DisplayTip("Kue", name + " has died");
+                        HUDManager.Instance.DisplayTip("Solar", name + " has died");
                     Debug.Log("[Kue] Death notification: " + name);
                 }
                 playerDeathState[id] = player.isPlayerDead;
@@ -3595,10 +4615,56 @@ namespace Kue.Internal
             if (rendererCache.TryGetValue(instanceId, out entry) && entry.owner == root)
                 return entry.renderers;
             entry =
-                new RendererCacheEntry { owner = root,
-                                         renderers = root.GetComponentsInChildren<Renderer>(true) };
+                new RendererCacheEntry { owner = root, renderers = HighestDetailRenderers(root) };
             rendererCache[instanceId] = entry;
             return entry.renderers;
+        }
+
+        private static Renderer[] HighestDetailRenderers(Component root)
+        {
+            Renderer[] all = root.GetComponentsInChildren<Renderer>(true);
+            LODGroup[] groups = root.GetComponentsInChildren<LODGroup>(true);
+            if (groups.Length == 0)
+                return all;
+            HashSet<Renderer> detailed = new HashSet<Renderer>();
+            HashSet<Renderer> reduced = new HashSet<Renderer>();
+            foreach (LODGroup group in groups)
+            {
+                LOD[] levels = group.GetLODs();
+                for (int level = 0; level < levels.Length; level++)
+                    foreach (Renderer renderer in levels[level].renderers)
+                        if (renderer != null)
+                            (level == 0 ? detailed : reduced).Add(renderer);
+            }
+            List<Renderer> kept = new List<Renderer>(all.Length);
+            foreach (Renderer renderer in all)
+                if (detailed.Contains(renderer) || !reduced.Contains(renderer))
+                    kept.Add(renderer);
+            return kept.ToArray();
+        }
+
+        private static int PlayerVisibleLayers(Camera camera)
+        {
+            int layers = camera != null ? camera.cullingMask : ~0;
+            foreach (string hidden in HelperLayerNames)
+            {
+                int layer = LayerMask.NameToLayer(hidden);
+                if (layer >= 0)
+                    layers &= ~(1 << layer);
+            }
+            int unseenEnemies = LayerMask.NameToLayer("EnemiesNotRendered");
+            if (unseenEnemies >= 0)
+                layers |= 1 << unseenEnemies;
+            return layers;
+        }
+
+        private static bool ModelRenderer(Renderer renderer, int visibleLayers)
+        {
+            return renderer != null && renderer.enabled && !renderer.forceRenderingOff &&
+                   renderer.sharedMaterial != null &&
+                   renderer.shadowCastingMode != ShadowCastingMode.ShadowsOnly &&
+                   (visibleLayers & (1 << renderer.gameObject.layer)) != 0 &&
+                   (renderer is MeshRenderer || renderer is SkinnedMeshRenderer);
         }
 
         private void PruneRendererCaches()
@@ -3641,11 +4707,13 @@ namespace Kue.Internal
                 activeEnemyCounts = new int[enemyCatalog.Count];
             else
                 Array.Clear(activeEnemyCounts, 0, activeEnemyCounts.Length);
+            livingEnemyCount = 0;
             foreach (UnityEngine.Object loaded in FindAll("EnemyAI"))
             {
                 EnemyAI enemy = loaded as EnemyAI;
                 if (enemy != null && !enemy.isEnemyDead)
                 {
+                    livingEnemyCount++;
                     KillHivelessBees(enemy, local);
                     Add(enemy.enemyType != null ? enemy.enemyType.enemyName : enemy.GetType().Name,
                         enemy.transform, enemy, outlineColors[2], Flag(2), -1, false, 12f,
@@ -3818,6 +4886,8 @@ namespace Kue.Internal
             DrawLabels();
             if (menuOpen && menuTexture != null)
                 GUI.DrawTexture(menuRect, menuTexture);
+            if (menuOpen && previewVisible && previewTexture != null)
+                GUI.DrawTexture(previewRect, previewTexture, ScaleMode.StretchToFill, false);
         }
 
         private void DrawLabels()
@@ -3976,11 +5046,10 @@ namespace Kue.Internal
             bool skeletonProjected = false;
             float screenWidth = Screen.width;
             float screenHeight = Screen.height;
+            int visibleLayers = PlayerVisibleLayers(camera);
             foreach (Renderer renderer in mark.renderers)
             {
-                if (renderer == null || !renderer.enabled)
-                    continue;
-                if (!(renderer is MeshRenderer) && !(renderer is SkinnedMeshRenderer))
+                if (!ModelRenderer(renderer, visibleLayers))
                     continue;
                 Bounds bounds = renderer.bounds;
                 if (limitRadius && (bounds.extents.sqrMagnitude > radiusSquared ||

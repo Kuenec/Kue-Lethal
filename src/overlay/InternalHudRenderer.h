@@ -72,7 +72,7 @@ class InternalHudRenderer final {
     static constexpr std::size_t kMaximumRasterBytes =
         static_cast<std::size_t>(kMaximumRasterWidth) *
         static_cast<std::size_t>(kMaximumRasterHeight) * std::size_t{4};
-    static constexpr std::size_t kMaximumCachedDrawBytes = 65536;
+    static constexpr std::size_t kMaximumCachedDrawBytes = 262144;
 
     [[nodiscard]] MenuRasterStatus setFontAtlas(MenuFontAtlas atlas) noexcept;
     void clearFontAtlas() noexcept;

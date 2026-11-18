@@ -457,6 +457,7 @@ if(KUE_BUILD_MODULE)
     UnityEngine.CoreModule.dll
     UnityEngine.IMGUIModule.dll
     UnityEngine.AIModule.dll
+    UnityEngine.AudioModule.dll
     UnityEngine.InputLegacyModule.dll
     UnityEngine.PhysicsModule.dll
     UnityEngine.TextRenderingModule.dll

@@ -98,10 +98,10 @@ void testValidation(TestRun& run) {
     run.expect(queue.push({kue::PlayerAction::Kill, kue::NoPlayerActionPayload{}}) ==
                    kue::PlayerActionEnqueueResult::InvalidRequest,
                "a mismatched payload is rejected before enqueue");
-    run.expect(queue.push({kue::PlayerAction::SpawnEnemy,
-                           kue::EnemySpawnPayload{{{7U}, 3U}, 0U, kue::EnemySpawnArea::Inside}}) ==
-                   kue::PlayerActionEnqueueResult::InvalidRequest,
-               "an invalid typed payload is rejected before enqueue");
+    run.expect(
+        queue.push({kue::PlayerAction::SpawnEnemy, kue::EnemySpawnPayload{{{7U}, 3U}, 0U}}) ==
+            kue::PlayerActionEnqueueResult::InvalidRequest,
+        "an invalid typed payload is rejected before enqueue");
     kue::PlayerActionRequest output = request(91);
     run.expect(!queue.pop(output), "rejected requests do not consume queue capacity");
     run.expect(targetClientId(output) == 91U, "empty removal preserves its output request");
@@ -166,9 +166,8 @@ void testPendingActionHandoff(TestRun& run) {
 
 void testCatalogIdentityHandoff(TestRun& run) {
     constexpr kue::EnemyTypeId selected{{41U}, 255U};
-    const kue::PlayerActionRequest request{
-        kue::PlayerAction::SpawnEnemyAtPlayer,
-        kue::EnemyAtPlayerPayload{selected, 20U, kue::EnemySpawnArea::Outside, 4095U}};
+    const kue::PlayerActionRequest request{kue::PlayerAction::SpawnEnemyAtPlayer,
+                                           kue::EnemyAtPlayerPayload{selected, 20U, 4095U, 0U}};
     kue::PendingPlayerAction pending;
     run.expect(pending.capture(request) == kue::PlayerActionCaptureResult::Captured,
                "a generation-bearing enemy selection enters the pending handoff");

@@ -667,6 +667,43 @@ run_process_search_contracts() {
         "inject never retries an unclassified attach failure"
 }
 
+enum_members() {
+    local path="$1"
+    local declaration="$2"
+    awk -v declaration="$declaration" '
+        index($0, declaration) { inside = 1; next }
+        inside && /}/ { exit }
+        inside {
+            gsub(/[[:space:]]|,|=.*/, "")
+            if ($0 != "" && $0 != "{" && $0 != "Count") print
+        }
+    ' "$path"
+}
+
+run_bridge_enum_contracts() {
+    local managed="$project_root/src/managed/KueInternalHud.cs"
+    local enum_name
+    local native
+    for enum_name in PlayerAction SessionSwitch WorldFeature; do
+        native="$project_root/src/game/Game.h"
+        if [[ "$enum_name" == "PlayerAction" ]]; then
+            native="$project_root/src/game/PlayerActions.h"
+        fi
+        enum_members "$native" "enum class $enum_name " \
+            >"$test_directory/native-$enum_name"
+        enum_members "$managed" "internal enum $enum_name" \
+            >"$test_directory/managed-$enum_name"
+        checks=$((checks + 1))
+        if [[ ! -s "$test_directory/native-$enum_name" ]] ||
+            ! cmp -s "$test_directory/native-$enum_name" \
+                "$test_directory/managed-$enum_name"; then
+            printf 'FAIL: managed %s mirrors the native enum order\n' \
+                "$enum_name" >&2
+            failures=$((failures + 1))
+        fi
+    done
+}
+
 if (($# > 1)); then
     printf '%s\n' 'FAIL: script tests accept at most one mode' >&2
     exit 1
@@ -699,6 +736,7 @@ cp -- "$project_root/config/kuelethal.json" "$test_directory/config.json"
 
 run_entry_validation_contracts
 run_process_search_contracts
+run_bridge_enum_contracts
 
 mkdir "$test_directory/missing-helper-project"
 cp -a -- "$project_root/scripts" "$test_directory/missing-helper-project/"

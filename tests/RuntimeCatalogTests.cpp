@@ -209,9 +209,8 @@ void testActionResolutionRejectsStaleCatalogIds(TestRun& run) {
     run.expect(gCatalogs.commitEnemyCatalog().result == kue::CatalogCommitResult::Committed,
                "an action-resolution enemy catalog commits");
     const kue::EnemyTypeId selected = gCatalogs.enemyAt(0).entry.id;
-    const kue::PlayerActionRequest request{
-        kue::PlayerAction::SpawnEnemy,
-        kue::EnemySpawnPayload{selected, 1U, kue::EnemySpawnArea::Inside}};
+    const kue::PlayerActionRequest request{kue::PlayerAction::SpawnEnemy,
+                                           kue::EnemySpawnPayload{selected, 1U}};
     const kue::PlayerActionCatalogResolution current =
         kue::resolvePlayerActionCatalog(request, gCatalogs);
     run.expect(current.result == kue::PlayerActionCatalogResolutionResult::Resolved &&
@@ -744,6 +743,99 @@ void testMoonCatalog(TestRun& run) {
                "a moon travel action cannot resolve after session reset");
 }
 
+void testEnemySpawnTraits(TestRun& run) {
+    gCatalogs.resetForSessionEnd();
+    constexpr kue::EnemySpawnTraits outsideSupported{kue::EnemyHabitat::Outside,
+                                                     kue::EnemyMapSupport::Supported};
+    run.expect(gCatalogs.setEnemySpawnTraits({{1U}, 0U}, outsideSupported) ==
+                   kue::EnemyTraitsResult::NoCatalog,
+               "spawn traits are refused before an enemy catalog exists");
+    run.expect(gCatalogs.beginEnemyCatalog() == kue::CatalogBeginResult::Begun,
+               "a spawn-traits enemy catalog begins");
+    run.expect(gCatalogs.reportEnemy(asset(31), name("baboon hawk")).result ==
+                   kue::CatalogReportResult::Recorded,
+               "the first spawn-traits enemy is staged");
+    run.expect(gCatalogs.reportEnemy(asset(32), name("bracken")).result ==
+                   kue::CatalogReportResult::Recorded,
+               "the second spawn-traits enemy is staged");
+    run.expect(gCatalogs.commitEnemyCatalog().result == kue::CatalogCommitResult::Committed,
+               "a spawn-traits enemy catalog commits");
+    const kue::EnemyTypeId first = gCatalogs.enemyAt(0).entry.id;
+    run.expect(gCatalogs.enemyAt(0).entry.traits == kue::EnemySpawnTraits{},
+               "a new enemy entry starts as an unsupported facility type");
+    run.expect(gCatalogs.setEnemySpawnTraits(first, outsideSupported) ==
+                   kue::EnemyTraitsResult::Recorded,
+               "spawn traits are recorded for a current enemy ID");
+    run.expect(gCatalogs.enemyAt(0).entry.traits == outsideSupported &&
+                   gCatalogs.enemyAt(1).entry.traits == kue::EnemySpawnTraits{},
+               "spawn traits change only their own enemy entry");
+    run.expect(gCatalogs.setEnemySpawnTraits({first.generation, 2U}, outsideSupported) ==
+                   kue::EnemyTraitsResult::IndexOutOfRange,
+               "spawn traits beyond the live enemy count are rejected");
+    run.expect(
+        gCatalogs.setEnemySpawnTraits({{first.generation.value + 1U}, 0U}, outsideSupported) ==
+            kue::EnemyTraitsResult::StaleGeneration,
+        "spawn traits for another catalog generation are rejected");
+
+    run.expect(gCatalogs.beginEnemyCatalog() == kue::CatalogBeginResult::Begun,
+               "a replacement spawn-traits catalog begins");
+    run.expect(gCatalogs.reportEnemy(asset(33), name("jester")).result ==
+                   kue::CatalogReportResult::Recorded,
+               "a replacement spawn-traits enemy is staged");
+    run.expect(gCatalogs.commitEnemyCatalog().result == kue::CatalogCommitResult::Committed,
+               "a replacement spawn-traits catalog commits");
+    run.expect(gCatalogs.enemyAt(0).entry.traits == kue::EnemySpawnTraits{},
+               "a replacement catalog clears the previous spawn traits");
+    run.expect(gCatalogs.setEnemySpawnTraits(first, outsideSupported) ==
+                   kue::EnemyTraitsResult::StaleGeneration,
+               "a replaced enemy ID can no longer carry spawn traits");
+}
+
+void testHazardCatalog(TestRun& run) {
+    gCatalogs.resetForSessionEnd();
+    run.expect(gCatalogs.hazardAt(0).result == kue::CatalogLookupResult::NoCatalog,
+               "an empty hazard catalog reports no catalog");
+    run.expect(gCatalogs.beginHazardCatalog() == kue::CatalogBeginResult::Begun,
+               "a hazard transaction begins");
+    run.expect(gCatalogs.reportMoon(asset(5), name("stray")).result ==
+                   kue::CatalogReportResult::WrongTransaction,
+               "a moon report is refused inside a hazard transaction");
+    run.expect(gCatalogs.reportHazard(asset(51), name("Landmine")).result ==
+                   kue::CatalogReportResult::Recorded,
+               "the first hazard is recorded");
+    run.expect(gCatalogs.reportHazard(asset(52), name("Turret")).result ==
+                   kue::CatalogReportResult::Recorded,
+               "the second hazard is recorded");
+    run.expect(gCatalogs.commitHazardCatalog().result == kue::CatalogCommitResult::Committed,
+               "a hazard transaction commits");
+    run.expect(gCatalogs.hazardCount() == 2, "a hazard commit publishes its dense size");
+    const kue::HazardCatalogLookup turret = gCatalogs.hazardAt(1);
+    run.expect(turret.result == kue::CatalogLookupResult::Found &&
+                   turret.entry.asset == asset(52) && turret.entry.name == "Turret" &&
+                   turret.entry.id.index == 1,
+               "a hazard entry preserves identity, name, and index");
+    run.expect(gCatalogs.hazardAt(2).result == kue::CatalogLookupResult::IndexOutOfRange,
+               "the first hazard index beyond the live size is rejected");
+    run.expect(gCatalogs.hazard(kue::HazardTypeId{kue::HazardCatalogGeneration{0}, 1U}).result ==
+                   kue::CatalogLookupResult::StaleGeneration,
+               "a stale typed hazard ID is rejected");
+    const kue::PlayerActionRequest place{kue::PlayerAction::SpawnHazardAtPlayer,
+                                         kue::HazardAtPlayerPayload{turret.entry.id, 3U, 2U, 5U}};
+    const kue::PlayerActionCatalogResolution resolved =
+        kue::resolvePlayerActionCatalog(place, gCatalogs);
+    run.expect(resolved.result == kue::PlayerActionCatalogResolutionResult::Resolved &&
+                   resolved.index == 1,
+               "a hazard spawn action resolves its executor index");
+    run.expect(gCatalogs.enemyCount() == 0 && gCatalogs.itemCount() == 0 &&
+                   gCatalogs.moonCount() == 0,
+               "a hazard commit leaves the other catalogs untouched");
+    gCatalogs.resetForSessionEnd();
+    run.expect(gCatalogs.hazardCount() == 0, "session reset clears the hazard catalog");
+    run.expect(kue::resolvePlayerActionCatalog(place, gCatalogs).result ==
+                   kue::PlayerActionCatalogResolutionResult::NoCatalog,
+               "a hazard spawn action cannot resolve after session reset");
+}
+
 void testSessionReset(TestRun& run) {
     gCatalogs.resetForSessionEnd();
     commitInstalledCatalogs(run);
@@ -852,6 +944,8 @@ int main() {
     testFullCapacity(run);
     testUnchangedIdentityAndAllocation(run);
     testMoonCatalog(run);
+    testEnemySpawnTraits(run);
+    testHazardCatalog(run);
     testSessionReset(run);
     return run.result();
 }

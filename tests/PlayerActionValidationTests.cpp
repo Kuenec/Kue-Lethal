@@ -40,10 +40,10 @@ struct ActionContract {
     std::string_view name;
 };
 
-constexpr std::array<ActionContract, 48> kActionContracts{{
+constexpr std::array<ActionContract, 50> kActionContracts{{
     {kue::PlayerAction::TeleportTo, kue::PlayerActionPayloadKind::PlayerTarget, "TeleportTo"},
     {kue::PlayerAction::Kill, kue::PlayerActionPayloadKind::PlayerTarget, "Kill"},
-    {kue::PlayerAction::Heal, kue::PlayerActionPayloadKind::PlayerTarget, "Heal"},
+    {kue::PlayerAction::HealSelf, kue::PlayerActionPayloadKind::None, "HealSelf"},
     {kue::PlayerAction::KillAll, kue::PlayerActionPayloadKind::None, "KillAll"},
     {kue::PlayerAction::KillAllExceptLocal, kue::PlayerActionPayloadKind::None,
      "KillAllExceptLocal"},
@@ -109,9 +109,13 @@ constexpr std::array<ActionContract, 48> kActionContracts{{
      "AddTerminalCredits"},
     {kue::PlayerAction::ToggleThirdPerson, kue::PlayerActionPayloadKind::None, "ToggleThirdPerson"},
     {kue::PlayerAction::TravelToMoon, kue::PlayerActionPayloadKind::MoonTravel, "TravelToMoon"},
+    {kue::PlayerAction::ToggleHearEveryone, kue::PlayerActionPayloadKind::None,
+     "ToggleHearEveryone"},
+    {kue::PlayerAction::SpawnHazardAtPlayer, kue::PlayerActionPayloadKind::HazardAtPlayer,
+     "SpawnHazardAtPlayer"},
 }};
 
-constexpr std::array<kue::PlayerActionPayloadKind, 8> kPayloadKinds{{
+constexpr std::array<kue::PlayerActionPayloadKind, 9> kPayloadKinds{{
     kue::PlayerActionPayloadKind::None,
     kue::PlayerActionPayloadKind::PlayerTarget,
     kue::PlayerActionPayloadKind::EnemySpawn,
@@ -120,22 +124,25 @@ constexpr std::array<kue::PlayerActionPayloadKind, 8> kPayloadKinds{{
     kue::PlayerActionPayloadKind::PlushieInterval,
     kue::PlayerActionPayloadKind::TerminalCredits,
     kue::PlayerActionPayloadKind::MoonTravel,
+    kue::PlayerActionPayloadKind::HazardAtPlayer,
 }};
 
 constexpr kue::EnemyTypeId kEnemyType{{7U}, 3U};
 constexpr kue::ItemTypeId kItemType{{11U}, 3U};
 constexpr kue::MoonTypeId kMoonType{{13U}, 2U};
+constexpr kue::HazardTypeId kHazardType{{17U}, 1U};
 
 std::array<kue::PlayerActionPayload, kPayloadKinds.size()> payloadFixtures() {
     return {{
         kue::NoPlayerActionPayload{},
         kue::PlayerTargetPayload{17U},
-        kue::EnemySpawnPayload{kEnemyType, 2U, kue::EnemySpawnArea::Inside},
-        kue::EnemyAtPlayerPayload{kEnemyType, 2U, kue::EnemySpawnArea::Outside, 17U},
-        kue::ItemAtPlayerPayload{kItemType, 2U, 17U},
+        kue::EnemySpawnPayload{kEnemyType, 2U},
+        kue::EnemyAtPlayerPayload{kEnemyType, 2U, 17U, 0U},
+        kue::ItemAtPlayerPayload{kItemType, 2U, 17U, std::nullopt},
         kue::PlushieIntervalPayload{std::chrono::milliseconds{250}},
         kue::TerminalCreditsPayload{2500},
         kue::MoonTravelPayload{kMoonType},
+        kue::HazardAtPlayerPayload{kHazardType, 2U, 17U, 5U},
     }};
 }
 
@@ -176,63 +183,92 @@ void testActionPayloadContracts(TestRun& run) {
 void testPayloadBoundaries(TestRun& run) {
     using enum kue::PlayerActionValidation;
     run.expect(kue::validatePlayerActionRequest(
-                   {kue::PlayerAction::SpawnEnemy,
-                    kue::EnemySpawnPayload{{{}, 0U}, 1U, kue::EnemySpawnArea::Inside}}) ==
+                   {kue::PlayerAction::SpawnEnemy, kue::EnemySpawnPayload{{{}, 0U}, 1U}}) ==
                    InvalidPayload,
                "SpawnEnemy", "a zero catalog generation must be rejected");
     run.expect(kue::validatePlayerActionRequest(
                    {kue::PlayerAction::SpawnEnemy,
-                    kue::EnemySpawnPayload{{{7U}, static_cast<std::uint16_t>(
-                                                      kue::kRuntimeCatalogCapacity)},
-                                           1U, kue::EnemySpawnArea::Inside}}) ==
+                    kue::EnemySpawnPayload{
+                        {{7U}, static_cast<std::uint16_t>(kue::kRuntimeCatalogCapacity)}, 1U}}) ==
                    InvalidPayload,
                "SpawnEnemy", "an out-of-range catalog index must be rejected");
     run.expect(kue::validatePlayerActionRequest(
-                   {kue::PlayerAction::SpawnEnemy,
-                    kue::EnemySpawnPayload{kEnemyType, 0U, kue::EnemySpawnArea::Inside}}) ==
+                   {kue::PlayerAction::SpawnEnemy, kue::EnemySpawnPayload{kEnemyType, 0U}}) ==
                    InvalidPayload,
                "SpawnEnemy", "zero count must be rejected");
     run.expect(kue::validatePlayerActionRequest(
-                   {kue::PlayerAction::SpawnEnemy,
-                    kue::EnemySpawnPayload{kEnemyType, 21U, kue::EnemySpawnArea::Inside}}) ==
+                   {kue::PlayerAction::SpawnEnemy, kue::EnemySpawnPayload{kEnemyType, 21U}}) ==
                    InvalidPayload,
                "SpawnEnemy", "count above twenty must be rejected");
-    run.expect(kue::validatePlayerActionRequest(
-                   {kue::PlayerAction::SpawnEnemy,
-                    kue::EnemySpawnPayload{kEnemyType, 1U, kue::EnemySpawnArea::Inside}}) == Valid,
+    run.expect(kue::validatePlayerActionRequest({kue::PlayerAction::SpawnEnemy,
+                                                 kue::EnemySpawnPayload{kEnemyType, 1U}}) == Valid,
                "SpawnEnemy", "count one must be accepted");
-    run.expect(kue::validatePlayerActionRequest(
-                   {kue::PlayerAction::SpawnEnemy,
-                    kue::EnemySpawnPayload{kEnemyType, 20U, kue::EnemySpawnArea::Outside}}) ==
-                   Valid,
+    run.expect(kue::validatePlayerActionRequest({kue::PlayerAction::SpawnEnemy,
+                                                 kue::EnemySpawnPayload{kEnemyType, 20U}}) == Valid,
                "SpawnEnemy", "count twenty must be accepted");
     run.expect(kue::validatePlayerActionRequest(
                    {kue::PlayerAction::SpawnEnemyAtPlayer,
-                    kue::EnemyAtPlayerPayload{kEnemyType, 0U, kue::EnemySpawnArea::Inside, 17U}}) ==
-                   InvalidPayload,
+                    kue::EnemyAtPlayerPayload{kEnemyType, 0U, 17U, 0U}}) == InvalidPayload,
                "SpawnEnemyAtPlayer", "zero count must be rejected");
     run.expect(kue::validatePlayerActionRequest(
                    {kue::PlayerAction::SpawnEnemyAtPlayer,
-                    kue::EnemyAtPlayerPayload{kEnemyType, 21U, kue::EnemySpawnArea::Outside,
-                                              17U}}) == InvalidPayload,
+                    kue::EnemyAtPlayerPayload{kEnemyType, 21U, 17U, 0U}}) == InvalidPayload,
                "SpawnEnemyAtPlayer", "count above twenty must be rejected");
     run.expect(kue::validatePlayerActionRequest(
                    {kue::PlayerAction::SpawnEnemyAtPlayer,
-                    kue::EnemyAtPlayerPayload{kEnemyType, 20U, kue::EnemySpawnArea::Outside,
-                                              17U}}) == Valid,
+                    kue::EnemyAtPlayerPayload{kEnemyType, 20U, 17U, 0U}}) == Valid,
                "SpawnEnemyAtPlayer", "count twenty must be accepted");
-    run.expect(kue::validatePlayerActionRequest({kue::PlayerAction::SpawnItemAtPlayer,
-                                                 kue::ItemAtPlayerPayload{kItemType, 0U, 17U}}) ==
-                   InvalidPayload,
+    run.expect(kue::validatePlayerActionRequest(
+                   {kue::PlayerAction::SpawnItemAtPlayer,
+                    kue::ItemAtPlayerPayload{kItemType, 0U, 17U, std::nullopt}}) == InvalidPayload,
                "SpawnItemAtPlayer", "zero count must be rejected");
-    run.expect(kue::validatePlayerActionRequest({kue::PlayerAction::SpawnItemAtPlayer,
-                                                 kue::ItemAtPlayerPayload{kItemType, 21U, 17U}}) ==
-                   InvalidPayload,
+    run.expect(kue::validatePlayerActionRequest(
+                   {kue::PlayerAction::SpawnItemAtPlayer,
+                    kue::ItemAtPlayerPayload{kItemType, 21U, 17U, std::nullopt}}) == InvalidPayload,
                "SpawnItemAtPlayer", "count above twenty must be rejected");
-    run.expect(kue::validatePlayerActionRequest({kue::PlayerAction::SpawnItemAtPlayer,
-                                                 kue::ItemAtPlayerPayload{kItemType, 20U, 17U}}) ==
-                   Valid,
+    run.expect(kue::validatePlayerActionRequest(
+                   {kue::PlayerAction::SpawnItemAtPlayer,
+                    kue::ItemAtPlayerPayload{kItemType, 20U, 17U, std::nullopt}}) == Valid,
                "SpawnItemAtPlayer", "count twenty must be accepted");
+    run.expect(kue::validatePlayerActionRequest(
+                   {kue::PlayerAction::SpawnEnemyAtPlayer,
+                    kue::EnemyAtPlayerPayload{kEnemyType, 1U, 17U,
+                                              kue::kMaximumSpawnDistanceMeters}}) == Valid,
+               "SpawnEnemyAtPlayer", "the maximum spawn distance must be accepted");
+    run.expect(kue::validatePlayerActionRequest(
+                   {kue::PlayerAction::SpawnEnemyAtPlayer,
+                    kue::EnemyAtPlayerPayload{
+                        kEnemyType, 1U, 17U,
+                        static_cast<std::uint8_t>(kue::kMaximumSpawnDistanceMeters + 1U)}}) ==
+                   InvalidPayload,
+               "SpawnEnemyAtPlayer", "a distance beyond the maximum must be rejected");
+    run.expect(kue::validatePlayerActionRequest(
+                   {kue::PlayerAction::SpawnItemAtPlayer,
+                    kue::ItemAtPlayerPayload{kItemType, 1U, 17U, -1}}) == InvalidPayload,
+               "SpawnItemAtPlayer", "a negative fixed scrap value must be rejected");
+    run.expect(kue::validatePlayerActionRequest(
+                   {kue::PlayerAction::SpawnItemAtPlayer,
+                    kue::ItemAtPlayerPayload{kItemType, 1U, 17U,
+                                             kue::kMaximumFixedScrapValue + 1}}) == InvalidPayload,
+               "SpawnItemAtPlayer", "a fixed scrap value above the maximum must be rejected");
+    run.expect(kue::validatePlayerActionRequest(
+                   {kue::PlayerAction::SpawnItemAtPlayer,
+                    kue::ItemAtPlayerPayload{kItemType, 1U, 17U, kue::kMaximumFixedScrapValue}}) ==
+                   Valid,
+               "SpawnItemAtPlayer", "the maximum fixed scrap value must be accepted");
+    run.expect(kue::validatePlayerActionRequest(
+                   {kue::PlayerAction::SpawnHazardAtPlayer,
+                    kue::HazardAtPlayerPayload{{{}, 0U}, 1U, 17U, 0U}}) == InvalidPayload,
+               "SpawnHazardAtPlayer", "a zero hazard catalog generation must be rejected");
+    run.expect(kue::validatePlayerActionRequest(
+                   {kue::PlayerAction::SpawnHazardAtPlayer,
+                    kue::HazardAtPlayerPayload{kHazardType, 21U, 17U, 0U}}) == InvalidPayload,
+               "SpawnHazardAtPlayer", "count above twenty must be rejected");
+    run.expect(kue::validatePlayerActionRequest(
+                   {kue::PlayerAction::SpawnHazardAtPlayer,
+                    kue::HazardAtPlayerPayload{kHazardType, 20U, 17U,
+                                               kue::kMaximumSpawnDistanceMeters}}) == Valid,
+               "SpawnHazardAtPlayer", "the maximum count and distance must be accepted");
     run.expect(kue::validatePlayerActionRequest(
                    {kue::PlayerAction::TogglePjManSpam,
                     kue::PlushieIntervalPayload{std::chrono::milliseconds{-1}}}) == InvalidPayload,
@@ -288,9 +324,9 @@ static_assert(std::is_same_v<decltype(kue::EnemyAtPlayerPayload::enemyType), kue
 static_assert(std::is_same_v<decltype(kue::ItemAtPlayerPayload::itemType), kue::ItemTypeId>);
 static_assert(std::is_same_v<decltype(kue::MoonTravelPayload::moon), kue::MoonTypeId>);
 static_assert(std::variant_size_v<kue::PlayerActionPayload> == kPayloadKinds.size());
-static_assert(static_cast<std::size_t>(kue::PlayerAction::TravelToMoon) ==
+static_assert(std::is_same_v<decltype(kue::HazardAtPlayerPayload::hazardType), kue::HazardTypeId>);
+static_assert(static_cast<std::size_t>(kue::PlayerAction::SpawnHazardAtPlayer) ==
               kActionContracts.size());
-
 }
 
 int main() {
