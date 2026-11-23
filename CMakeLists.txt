@@ -671,6 +671,18 @@ if(BUILD_TESTING)
     kue_add_test_executable(kue-remote-start-fixture tests/RemoteStartFixture.cpp)
     target_link_libraries(kue-remote-start-fixture PRIVATE kue-platform)
 
+    add_library(kue-mono-module-fixture MODULE tests/MonoModuleFixture.cpp)
+    target_compile_options(kue-mono-module-fixture PRIVATE ${KUE_STRICT_COMPILE_OPTIONS})
+    set_target_properties(kue-mono-module-fixture PROPERTIES
+      PREFIX ""
+      OUTPUT_NAME "mono-2.0-bdwgc"
+    )
+    kue_add_test_executable(kue-pe-export-tests tests/PeExportTests.cpp src/mono/PeExport.cpp)
+    add_test(
+      NAME kue-pe-export
+      COMMAND kue-pe-export-tests $<TARGET_FILE:kue-mono-module-fixture>
+    )
+
     kue_add_test_executable(kue-injector-tests tests/InjectorTests.cpp)
     target_link_libraries(kue-injector-tests PRIVATE kue-platform)
     add_test(

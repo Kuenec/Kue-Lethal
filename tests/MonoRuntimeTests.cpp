@@ -363,9 +363,9 @@ void operator delete[](void* memory, std::size_t, std::align_val_t) noexcept {
 
 namespace kue::mono::pe {
 
-void* moduleBase(const char* moduleSubstring) {
-    if (!gMonoFixtureEnabled.load(std::memory_order_acquire) || !moduleSubstring ||
-        std::strcmp(moduleSubstring, "mono-2.0-bdwgc") != 0) {
+void* moduleBase(const char* moduleName) {
+    if (!gMonoFixtureEnabled.load(std::memory_order_acquire) || !moduleName ||
+        std::strcmp(moduleName, kMonoModuleName) != 0) {
         return nullptr;
     }
     return &gDomainStorage;

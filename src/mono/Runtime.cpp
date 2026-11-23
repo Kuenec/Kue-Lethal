@@ -173,7 +173,7 @@ bool bindMono(void* base, T& destination, const char* name, RequiredMonoSymbol s
 }
 
 bool resolveMono(RuntimeResolveError& error) {
-    void* base = pe::moduleBase("mono-2.0-bdwgc");
+    void* base = pe::moduleBase(pe::kMonoModuleName);
     if (!base) {
         error.failure = RuntimeResolveFailure::MonoModuleUnavailable;
         return false;
