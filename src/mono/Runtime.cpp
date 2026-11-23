@@ -83,7 +83,7 @@ struct MonoRaw {
                                        std::uintptr_t index) = nullptr;
     void*(MSABI* thread_attach)(void* domain) = nullptr;
     MonoThreadDetachFn thread_detach = nullptr;
-    void*(MSABI* thread_current)() = nullptr;
+    void*(MSABI* thread_internal_current)() = nullptr;
     std::uint16_t*(MSABI* string_chars)(void* stringObject) = nullptr;
     int(MSABI* string_length)(void* stringObject) = nullptr;
 };
@@ -106,7 +106,7 @@ enum class RequiredMonoSymbol : std::uint8_t {
     ArrayAddress,
     ThreadAttach,
     ThreadDetach,
-    ThreadCurrent,
+    ThreadInternalCurrent,
     StringChars,
     StringLength,
     Count
@@ -132,7 +132,7 @@ constexpr auto kRequiredMonoSymbolNames =
                                 "mono_array_addr_with_size",
                                 "mono_thread_attach",
                                 "mono_thread_detach",
-                                "mono_thread_current",
+                                "mono_thread_internal_current",
                                 "mono_string_chars",
                                 "mono_string_length"});
 static_assert(kRequiredMonoSymbolNames.size() == kRequiredMonoSymbolCount);
@@ -147,7 +147,7 @@ void* gMonoDomain = nullptr;
 bool attachCurrentMonoThread(const MonoRaw& mono, void* domain) {
     if (gCurrentMonoThread)
         return true;
-    if (void* current = mono.thread_current()) {
+    if (void* current = mono.thread_internal_current()) {
         gCurrentMonoThread = current;
         gCurrentMonoThreadDetach = nullptr;
         return true;
@@ -202,7 +202,7 @@ bool resolveMono(RuntimeResolveError& error) {
     BIND_M(array_addr_with_size, ArrayAddress);
     BIND_M(thread_attach, ThreadAttach);
     BIND_M(thread_detach, ThreadDetach);
-    BIND_M(thread_current, ThreadCurrent);
+    BIND_M(thread_internal_current, ThreadInternalCurrent);
     BIND_M(string_chars, StringChars);
     BIND_M(string_length, StringLength);
 

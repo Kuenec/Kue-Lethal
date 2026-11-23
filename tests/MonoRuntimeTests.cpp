@@ -258,7 +258,7 @@ void MSABI fakeMonoThreadDetach(void*) {
     gMonoDetachCalls.fetch_add(1, std::memory_order_relaxed);
 }
 
-void* MSABI fakeMonoThreadCurrent() {
+void* MSABI fakeMonoThreadInternalCurrent() {
     return nullptr;
 }
 
@@ -416,8 +416,8 @@ void* getExport(void* base, const char* name) {
         return functionAddress(&fakeMonoThreadAttach);
     if (std::strcmp(name, "mono_thread_detach") == 0)
         return functionAddress(&fakeMonoThreadDetach);
-    if (std::strcmp(name, "mono_thread_current") == 0)
-        return functionAddress(&fakeMonoThreadCurrent);
+    if (std::strcmp(name, "mono_thread_internal_current") == 0)
+        return functionAddress(&fakeMonoThreadInternalCurrent);
     if (std::strcmp(name, "mono_string_chars") == 0)
         return functionAddress(&fakeMonoStringChars);
     if (std::strcmp(name, "mono_string_length") == 0)
