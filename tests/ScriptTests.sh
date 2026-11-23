@@ -646,6 +646,18 @@ if [[ "$(windows_path '/home/player/Kue Lethal/build-windows/kuelethal.dll')" !=
     printf '%s\n' 'FAIL: inject maps host paths onto drive Z:' >&2
     failures=$((failures + 1))
 fi
+eval "$(sed -n '/^collect_game_environment() {/,/^}/p' "$project_root/scripts/inject.sh")"
+printf '%s\0' 'WINEPREFIX=/games/pfx' 'WINESERVERSOCKET=40' 'WINELOADERNOEXEC=1' \
+    'WINEPRELOADRESERVE=140000000-1400a8000' 'WINE_LD_PRELOAD=/overlay.so' \
+    'WINEFSYNC=1' 'LD_PRELOAD=/overlay.so' >"$test_directory/game-environ"
+collect_game_environment "$test_directory/game-environ"
+checks=$((checks + 1))
+if [[ "$wine_prefix" != /games/pfx ]] ||
+    [[ "${game_environment[*]}" != 'WINEPREFIX=/games/pfx WINEFSYNC=1' ]]; then
+    printf 'FAIL: inject keeps only shareable Wine settings, got: %s\n' \
+        "${game_environment[*]}" >&2
+    failures=$((failures + 1))
+fi
 expect_count 0 'gdb' "$project_root/scripts/inject.sh" \
     "inject loads the module without a debugger"
 

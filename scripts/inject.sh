@@ -325,17 +325,24 @@ if [[ ! /proc/$target/root -ef / ]]; then
     exit 1
 fi
 
-game_environment=()
-wine_prefix=""
-while IFS= read -r -d '' entry; do
-    case "$entry" in
-        WINEPREFIX=*)
-            wine_prefix="${entry#WINEPREFIX=}"
-            game_environment+=("$entry")
-            ;;
-        WINE*=* | LD_LIBRARY_PATH=* | PATH=*) game_environment+=("$entry") ;;
-    esac
-done <"/proc/$target/environ"
+collect_game_environment() {
+    local entry
+    game_environment=()
+    wine_prefix=""
+    while IFS= read -r -d '' entry; do
+        case "$entry" in
+            WINEPREFIX=*)
+                wine_prefix="${entry#WINEPREFIX=}"
+                game_environment+=("$entry")
+                ;;
+            WINESERVERSOCKET=* | WINELOADERNOEXEC=* | WINEPRELOADRESERVE=*) ;;
+            WINE_LD_PRELOAD=*) ;;
+            WINE*=* | LD_LIBRARY_PATH=* | PATH=*) game_environment+=("$entry") ;;
+        esac
+    done <"$1"
+}
+
+collect_game_environment "/proc/$target/environ"
 if [[ -z "$wine_prefix" ]]; then
     printf '[kue] error: pid %s has no WINEPREFIX; is it running under Proton?\n' \
         "$target" >&2
@@ -346,17 +353,18 @@ if [[ ! "$wine_prefix/dosdevices/z:" -ef / ]]; then
     exit 1
 fi
 
-wine_directory="$(dirname -- "$(readlink "/proc/$target/exe")")"
+wine_search="$(dirname -- "$(readlink "/proc/$target/exe")")"
 wine=""
-for wine_name in wine wine64; do
-    if [[ -x "$wine_directory/$wine_name" ]]; then
-        wine="$wine_directory/$wine_name"
+for _ in 1 2 3 4; do
+    if [[ -x "$wine_search/bin/wine" ]]; then
+        wine="$wine_search/bin/wine"
         break
     fi
+    wine_search="$(dirname -- "$wine_search")"
 done
 if [[ -z "$wine" ]]; then
-    printf '[kue] error: no Wine loader next to the game process in %s\n' \
-        "$wine_directory" >&2
+    printf '[kue] error: no Wine launcher above the game binary %s\n' \
+        "$(readlink "/proc/$target/exe")" >&2
     exit 1
 fi
 
