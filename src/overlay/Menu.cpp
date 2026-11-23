@@ -409,7 +409,9 @@ void sectionTitle(Icon icon, const char* label) {
              color(palette::kMuted), 0.8f);
     ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 19.f);
     ImGui::PushStyleColor(ImGuiCol_Text, palette::kMuted);
+    ImGui::PushTextWrapPos(0.f);
     ImGui::TextUnformatted(label);
+    ImGui::PopTextWrapPos();
     ImGui::PopStyleColor();
     ImGui::Dummy(ImVec2(0.f, 1.f));
     if (caption) {
@@ -1483,7 +1485,7 @@ void Interface::drawEnemyTypes(const MenuSnapshot& snapshot, const RuntimeCatalo
             mSpawnKind = SpawnKind::Traps;
         }
         noteHint(mHint, "Turrets, landmines and the other map traps.");
-        sectionTitle(Icon::List, "ENEMY TYPES");
+        sectionTitle(Icon::List, "TYPES THAT WORK THERE");
         std::array<char, kRuntimeCatalogNameCapacity + 1> label{};
         std::array<char, 24> detail{};
         for (std::size_t index = 0; index < enemyCount; ++index) {
