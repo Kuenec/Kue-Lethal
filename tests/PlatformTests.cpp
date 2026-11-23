@@ -264,6 +264,25 @@ void testProcess(TestRun& run) {
 
 }
 
+void testSystemFonts(TestRun& run) {
+#if defined(_WIN32)
+    const std::filesystem::path hostBody = "Z:\\usr\\share\\fonts\\TTF\\DejaVuSans.ttf";
+#else
+    const std::filesystem::path hostBody = "/usr/share/fonts/TTF/DejaVuSans.ttf";
+#endif
+    std::error_code error;
+    if (!std::filesystem::is_regular_file(hostBody, error))
+        return;
+    for (const kue::platform::SystemFontRole role :
+         {kue::platform::SystemFontRole::Body, kue::platform::SystemFontRole::Title}) {
+        kue::platform::EnvironmentStorage storage;
+        const kue::platform::SystemFontPath font = kue::platform::systemFontPath(role, storage);
+        run.expect(font.available &&
+                       std::filesystem::is_regular_file(std::filesystem::path(font.path), error),
+                   "a menu font is found when the host has DejaVu Sans");
+    }
+}
+
 int main() {
     TestRun run;
     testUtf8ToUtf16(run);
@@ -271,5 +290,6 @@ int main() {
     testFiles(run);
     testMemory(run);
     testProcess(run);
+    testSystemFonts(run);
     return run.result();
 }

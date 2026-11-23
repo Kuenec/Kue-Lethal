@@ -2,7 +2,9 @@
 
 #include "platform/WindowsSupport.h"
 
+#include <array>
 #include <cstring>
+#include <string_view>
 
 namespace kue::platform {
 
@@ -76,18 +78,22 @@ int writeEnvironment(const char* name, const char* utf8Value) noexcept {
     return errnoFromWin32(error);
 }
 
-SystemFontPath systemFontPath(SystemFontRole role, EnvironmentStorage& storage) noexcept {
-    EnvironmentStorage windowsDirectory;
-    const EnvironmentValue root = readEnvironment("WINDIR", windowsDirectory);
-    if (root.status != EnvironmentStatus::Valid)
+namespace {
+
+constexpr std::array<std::string_view, 2> kWineHostBodyFonts = {
+    "Z:\\usr\\share\\fonts\\TTF\\DejaVuSans.ttf",
+    "Z:\\usr\\share\\fonts\\truetype\\dejavu\\DejaVuSans.ttf"};
+constexpr std::array<std::string_view, 2> kWineHostTitleFonts = {
+    "Z:\\usr\\share\\fonts\\TTF\\DejaVuSans-Bold.ttf",
+    "Z:\\usr\\share\\fonts\\truetype\\dejavu\\DejaVuSans-Bold.ttf"};
+
+SystemFontPath existingFont(std::string_view directory, std::string_view file,
+                            EnvironmentStorage& storage) noexcept {
+    if (directory.size() + file.size() > kMaximumEnvironmentValueBytes)
         return {false, {}};
-    const std::string_view file =
-        role == SystemFontRole::Body ? "\\Fonts\\segoeui.ttf" : "\\Fonts\\segoeuib.ttf";
-    if (root.text.size() + file.size() > kMaximumEnvironmentValueBytes)
-        return {false, {}};
-    std::memcpy(storage.data(), root.text.data(), root.text.size());
-    std::memcpy(storage.data() + root.text.size(), file.data(), file.size());
-    const std::size_t size = root.text.size() + file.size();
+    std::memcpy(storage.data(), directory.data(), directory.size());
+    std::memcpy(storage.data() + directory.size(), file.data(), file.size());
+    const std::size_t size = directory.size() + file.size();
     storage[size] = '\0';
     WideText<kMaximumEnvironmentValueBytes> widePath;
     if (toWide(std::string_view(storage.data(), size), widePath) !=
@@ -96,6 +102,28 @@ SystemFontPath systemFontPath(SystemFontRole role, EnvironmentStorage& storage) 
         return {false, {}};
     }
     return {true, {storage.data(), size}};
+}
+
+}
+
+SystemFontPath systemFontPath(SystemFontRole role, EnvironmentStorage& storage) noexcept {
+    EnvironmentStorage windowsDirectory;
+    const EnvironmentValue root = readEnvironment("WINDIR", windowsDirectory);
+    if (root.status == EnvironmentStatus::Valid) {
+        const SystemFontPath windowsFont = existingFont(
+            root.text,
+            role == SystemFontRole::Body ? "\\Fonts\\segoeui.ttf" : "\\Fonts\\segoeuib.ttf",
+            storage);
+        if (windowsFont.available)
+            return windowsFont;
+    }
+    for (const std::string_view hostFont :
+         role == SystemFontRole::Body ? kWineHostBodyFonts : kWineHostTitleFonts) {
+        const SystemFontPath font = existingFont(hostFont, "", storage);
+        if (font.available)
+            return font;
+    }
+    return {false, {}};
 }
 
 }
