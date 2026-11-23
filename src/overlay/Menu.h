@@ -153,8 +153,8 @@ class Interface {
     float mPlushieIntervalSeconds = 0.5f;
     float mMenuLeft = 80.f;
     float mMenuTop = 80.f;
-    float mMenuWidth = 900.f;
-    float mMenuHeight = 520.f;
+    float mMenuWidth = 720.f;
+    float mMenuHeight = 440.f;
     int mLastWindowWidth = 0;
     int mLastWindowHeight = 0;
 };

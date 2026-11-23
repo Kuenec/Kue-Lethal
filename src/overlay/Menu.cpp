@@ -19,8 +19,8 @@ namespace kue::ui {
 
 namespace {
 
-constexpr float kMenuWidth = 900.f;
-constexpr float kMenuHeight = 520.f;
+constexpr float kMenuWidth = 720.f;
+constexpr float kMenuHeight = 440.f;
 constexpr float kSidebarWidth = 132.f;
 constexpr float kHeaderHeight = 38.f;
 constexpr float kFooterHeight = 26.f;
@@ -29,8 +29,8 @@ constexpr float kColumnGap = 10.f;
 constexpr float kRowHeight = 24.f;
 constexpr float kListRowHeight = 20.f;
 constexpr float kCardPadding = 6.f;
-constexpr float kListWidth = 200.f;
-constexpr float kControlsWidth = 276.f;
+constexpr float kListWidth = 140.f;
+constexpr float kControlsWidth = 300.f;
 constexpr float kLabelWidth = 104.f;
 constexpr float kPoundsPerCarryUnit = 105.f;
 
@@ -1483,7 +1483,7 @@ void Interface::drawEnemyTypes(const MenuSnapshot& snapshot, const RuntimeCatalo
             mSpawnKind = SpawnKind::Traps;
         }
         noteHint(mHint, "Turrets, landmines and the other map traps.");
-        sectionTitle(Icon::List, "TYPES THAT WORK THERE");
+        sectionTitle(Icon::List, "ENEMY TYPES");
         std::array<char, kRuntimeCatalogNameCapacity + 1> label{};
         std::array<char, 24> detail{};
         for (std::size_t index = 0; index < enemyCount; ++index) {
@@ -1862,14 +1862,13 @@ void Interface::drawTrollsPage(const MenuSnapshot& snapshot) {
             "Lets you open the hangar door in space. Only you see it move.",
             on(SessionSwitch::ShipDoorButtons), toggle(PlayerAction::OpenShipDoorSpace),
             whileOff(SessionSwitch::ShipDoorButtons, doorBlocked ? doorBlocked : orbitOnly));
-        sessionSwitch("Plushie squeak spam",
-                      "Squeezes the pajama man plushie in the ship over and over.",
-                      on(SessionSwitch::PlushieSpam),
-                      {PlayerAction::TogglePjManSpam,
-                       PlushieIntervalPayload{std::chrono::milliseconds{
-                           static_cast<int>(mPlushieIntervalSeconds * 1000.f)}}},
-                      whileOff(SessionSwitch::PlushieSpam,
-                               needs(WorldFeature::Plushie, "no plushie on this ship")));
+        sessionSwitch(
+            "Plushie squeak spam", "Squeezes the pajama man plushie in the ship over and over.",
+            on(SessionSwitch::PlushieSpam),
+            {PlayerAction::TogglePjManSpam,
+             PlushieIntervalPayload{
+                 std::chrono::milliseconds{static_cast<int>(mPlushieIntervalSeconds * 1000.f)}}},
+            whileOff(SessionSwitch::PlushieSpam, needs(WorldFeature::Plushie, "no plushie here")));
         if (!on(SessionSwitch::PlushieSpam)) {
             sliderRow("Squeak every", mPlushieIntervalSeconds, {.minimum = 0.f, .maximum = 1.f},
                       "%.2f s");
