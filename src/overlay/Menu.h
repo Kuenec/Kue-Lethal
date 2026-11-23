@@ -31,7 +31,7 @@ struct MenuRectangle {
     float height;
 };
 
-enum class PreviewKind : std::uint8_t { Enemy, Item, Trap };
+enum class PreviewKind : std::uint8_t { Enemy, Item, Trap, Moon };
 
 struct MenuPreview {
     PreviewKind kind;
@@ -80,7 +80,7 @@ class Interface {
         Enemies,
         Items,
         Moons,
-        World,
+        Trolls,
         Settings
     };
 
@@ -105,15 +105,20 @@ class Interface {
     void drawTrapTypes(const MenuSnapshot& snapshot, const RuntimeCatalogs& catalogs);
     void drawItemsPage(const MenuSnapshot& snapshot, const RuntimeCatalogs& catalogs);
     void drawMoonsPage(const MenuSnapshot& snapshot, const RuntimeCatalogs& catalogs);
-    void drawWorldPage(const MenuSnapshot& snapshot);
+    void drawTrollsPage(const MenuSnapshot& snapshot);
     void drawSettingsPage(MenuConfiguration& configuration, const MenuFrame& frame);
     void drawPlayerPicker(PlayerPicker picker, const MenuSnapshot& snapshot,
                           std::optional<std::uint64_t>& selected);
-    void drawPreview(PreviewKind kind, std::optional<std::size_t> catalogIndex);
+    void drawModelPanel(const MenuSnapshot& snapshot, PreviewKind kind,
+                        std::optional<std::size_t> catalogIndex, std::string_view name);
     void configSwitch(const char* label, const char* hint, bool& value);
-    void sessionSwitch(const char* label, const char* hint, bool on, PlayerAction action);
-    void command(const char* label, const char* hint, PlayerActionRequest request);
-    void dangerCommand(const char* label, const char* hint, PlayerActionRequest request);
+    void sessionSwitch(const char* label, const char* hint, bool on, PlayerActionRequest request,
+                       const char* blocked = nullptr);
+    void command(const char* label, const char* hint, PlayerActionRequest request,
+                 const char* blocked = nullptr);
+    void dangerCommand(const char* label, const char* hint, PlayerActionRequest request,
+                       const char* blocked = nullptr);
+    void blockedRow(const char* label, const char* hint, const char* reason);
     void markConfigChanged();
     void requestConfigSave();
     void queueAction(PlayerActionRequest request);
@@ -148,8 +153,8 @@ class Interface {
     float mPlushieIntervalSeconds = 0.5f;
     float mMenuLeft = 80.f;
     float mMenuTop = 80.f;
-    float mMenuWidth = 720.f;
-    float mMenuHeight = 440.f;
+    float mMenuWidth = 900.f;
+    float mMenuHeight = 520.f;
     int mLastWindowWidth = 0;
     int mLastWindowHeight = 0;
 };

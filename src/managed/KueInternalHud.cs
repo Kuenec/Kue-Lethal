@@ -95,7 +95,7 @@ namespace Kue.Internal
         None = 0,
         TeleportTo,
         Kill,
-        HealSelf,
+        Heal,
         KillAll,
         KillAllExceptLocal,
         LureAllEnemies,
@@ -191,6 +191,7 @@ namespace Kue.Internal
         HoardingBugNest,
         ShipDoor,
         ModelPreviews,
+        ModelMissing,
     }
 
     internal static class NativeBridge
@@ -328,6 +329,7 @@ namespace Kue.Internal
             Player,
             Enemy,
             Item,
+            Ship,
         }
 
         private sealed class Mark
@@ -342,6 +344,7 @@ namespace Kue.Internal
             public int value = -1;
             public bool enabled;
             public bool portal;
+            public BoxCollider portalBox;
             public float rendererRadius;
             public string labelText;
             public string labelName;
@@ -467,6 +470,8 @@ namespace Kue.Internal
         private const float MinimumEnemySpawnDistance = 2f;
         private const float StunSeconds = 60f;
         private const float LureSeconds = 30f;
+        private const float LimpClearSeconds = 25f;
+        private const float ShipOutlineRadius = 30f;
         private const float EngageDistance = 7f;
         private const float RetakeDistance = 22f;
         private const float HuntSpeed = 13f;
@@ -476,6 +481,8 @@ namespace Kue.Internal
         private const int PreviewKindEnemy = 0;
         private const int PreviewKindItem = 1;
         private const int PreviewKindTrap = 2;
+        private const int PreviewKindMoon = 3;
+        private const float PreviewElevationDegrees = 12f;
         private const float PreviewFieldOfView = 30f;
         private const float PreviewSpinDegrees = 35f;
 
@@ -582,6 +589,7 @@ namespace Kue.Internal
         private Rect previewRect;
         private bool previewVisible;
         private bool previewUnavailable;
+        private bool previewMissing;
         private readonly List<EnemyType> enemyCatalog = new List<EnemyType>();
         private readonly List<Item> itemCatalog = new List<Item>();
         private readonly List<SelectableLevel> moonCatalog = new List<SelectableLevel>();
@@ -1043,7 +1051,7 @@ namespace Kue.Internal
                 for (int i = 0; i < mark.renderers.Length && i < rendererLimit; i++)
                 {
                     Renderer renderer = mark.renderers[i];
-                    if (!ModelRenderer(renderer, visibleLayers))
+                    if (!ShownModelRenderer(renderer, visibleLayers))
                     {
                         if (mark.kind == MarkKind.Player)
                             rendererLimit++;
@@ -1392,12 +1400,17 @@ namespace Kue.Internal
             Debug.Log("[Kue] Teleported to " + target.playerUsername + " at " + position);
         }
 
-        private void HealSelfManaged()
+        private void HealPlayerManaged(PlayerControllerB player)
         {
             PlayerControllerB local = LocalPlayer();
-            if (local == null || local.isPlayerDead)
+            if (player == null || local == null || player.isPlayerDead)
             {
-                ReportActionFailure("Heal failed: you are not alive");
+                ReportActionFailure("Heal failed: target is not alive");
+                return;
+            }
+            if (player != local)
+            {
+                StartCoroutine(HealRemotePlayer(player, (int)local.playerClientId));
                 return;
             }
             local.health = FullHealth;
@@ -1405,6 +1418,34 @@ namespace Kue.Internal
             if (HUDManager.Instance != null)
                 HUDManager.Instance.UpdateHealthUI(FullHealth, false);
             Debug.Log("[Kue] Healed the local player");
+        }
+
+        private IEnumerator HealRemotePlayer(PlayerControllerB player, int localClientId)
+        {
+            if (player.criticallyInjured)
+                ShowTip("Healing " + player.playerUsername + " once the limp clears");
+            float deadline = Time.unscaledTime + LimpClearSeconds;
+            while (player != null && player.criticallyInjured && !player.isPlayerDead &&
+                   Time.unscaledTime < deadline)
+                yield return null;
+            if (player == null || player.isPlayerDead || !player.isPlayerControlled)
+            {
+                ReportActionFailure("Heal failed: target is no longer alive");
+                yield break;
+            }
+            if (player.criticallyInjured)
+            {
+                ReportActionFailure("Heal failed: " + player.playerUsername +
+                                    " is still critically injured");
+                yield break;
+            }
+            player.DamagePlayerFromOtherClientServerRpc(-FullHealth, Vector3.zero, localClientId);
+            Debug.Log("[Kue] Full heal sent to " + player.playerUsername + " (" +
+                      player.playerClientId + ")");
+            yield return new WaitForSeconds(1.5f);
+            if (player != null && !player.isPlayerDead && player.health < FullHealth)
+                ReportActionFailure(player.playerUsername +
+                                    " was not healed: blocked in orbit or by a snare flea");
         }
 
         private static bool EnemyOwnedBy(EnemyAI enemy, ulong clientId)
@@ -2700,6 +2741,8 @@ namespace Kue.Internal
             item.reachedFloorTarget = false;
             item.EnablePhysics(true);
             local.SetItemInElevator(inShipRoom, inElevator, item);
+            if (inShipRoom && !round.inShipPhase && RoundManager.Instance != null)
+                RoundManager.Instance.CollectNewScrapForThisRound(item);
         }
 
         private IEnumerator SettleItems(List<GrabbableObject> items, List<int> scrapValues,
@@ -2736,6 +2779,7 @@ namespace Kue.Internal
                 ThrowObjectServerRpcMethod.Invoke(local,
                                                   new object[] { reference, inElevator, inShipRoom,
                                                                  item.targetFloorPosition, -1 });
+                InvokeAny(item, "DiscardItemRpc");
             }
             RoundManager manager = RoundManager.Instance;
             if (scrapReferences.Count == 0 || manager == null)
@@ -3980,6 +4024,10 @@ namespace Kue.Internal
                            : null;
             case PreviewKindTrap:
                 return index < hazardCatalog.Count ? hazardCatalog[index] : null;
+            case PreviewKindMoon:
+                return index < moonCatalog.Count && moonCatalog[index] != null
+                           ? moonCatalog[index].planetPrefab
+                           : null;
             default:
                 return null;
             }
@@ -4155,18 +4203,25 @@ namespace Kue.Internal
                 previewTexture.Create();
             }
             Vector3 center = previewBounds.center;
-            float radius = Mathf.Max(previewBounds.extents.magnitude, 0.05f);
+            Vector3 extents = previewBounds.extents;
+            float girth =
+                Mathf.Max(Mathf.Sqrt(extents.x * extents.x + extents.z * extents.z), 0.02f);
+            float elevation = PreviewElevationDegrees * Mathf.Deg2Rad;
+            float halfHeight = extents.y * Mathf.Cos(elevation) + girth * Mathf.Sin(elevation);
             float aspect = (float)width / height;
-            float halfAngle = PreviewFieldOfView * 0.5f * Mathf.Deg2Rad;
-            float distance = radius / Mathf.Sin(halfAngle) / Mathf.Min(1f, aspect) * 1.05f;
-            Vector3 eye = center + new Vector3(0f, 0.22f, 1f).normalized *distance;
+            float slope = Mathf.Tan(PreviewFieldOfView * 0.5f * Mathf.Deg2Rad);
+            float distance =
+                (Mathf.Max(halfHeight / slope, girth / (slope * aspect)) + girth) * 1.06f;
+            float reach = girth + extents.y;
+            Vector3 eye =
+                center + new Vector3(0f, Mathf.Sin(elevation), Mathf.Cos(elevation)) * distance;
             Matrix4x4 view =
                 Matrix4x4.Scale(new Vector3(1f, 1f, -1f)) *
                 Matrix4x4.TRS(eye, Quaternion.LookRotation(center - eye, Vector3.up), Vector3.one)
                     .inverse;
             Matrix4x4 projection = Matrix4x4.Perspective(PreviewFieldOfView, aspect,
-                                                         Mathf.Max(0.01f, distance - radius * 1.5f),
-                                                         distance + radius * 1.5f);
+                                                         Mathf.Max(0.01f, distance - reach * 1.5f),
+                                                         distance + reach * 1.5f);
             Matrix4x4 spin =
                 Matrix4x4.Translate(center) *
                 Matrix4x4.Rotate(Quaternion.Euler(0f, Time.unscaledTime * PreviewSpinDegrees, 0f)) *
@@ -4198,6 +4253,7 @@ namespace Kue.Internal
         private void UpdatePreview()
         {
             previewVisible = false;
+            previewMissing = false;
             if (!menuOpen || !PreviewsSupported())
                 return;
             int kind;
@@ -4213,11 +4269,10 @@ namespace Kue.Internal
             try
             {
                 GameObject prefab = PreviewPrefab(kind, index);
-                if (prefab == null)
-                    return;
-                if (prefab != previewPrefab)
+                if (prefab != null && prefab != previewPrefab)
                     BuildPreviewModel(prefab);
-                if (previewParts.Count == 0)
+                previewMissing = prefab == null || previewParts.Count == 0;
+                if (previewMissing)
                     return;
                 RenderPreview(width, height);
                 previewRect = new Rect(x, y, width, height);
@@ -4386,8 +4441,10 @@ namespace Kue.Internal
             int secondsLeft = -1;
             if (lureClientId >= 0 && !lureRelentless)
                 secondsLeft = Mathf.Max(0, Mathf.CeilToInt(lureEndsAt - Time.unscaledTime));
-            NativeBridge.ReportSessionState(switches, scannedWorld, scannedPlayersInFacility,
-                                            lureClientId, secondsLeft);
+            int world =
+                previewMissing ? scannedWorld | Bit(WorldFeature.ModelMissing) : scannedWorld;
+            NativeBridge.ReportSessionState(switches, world, scannedPlayersInFacility, lureClientId,
+                                            secondsLeft);
         }
 
         private void RunAction(PlayerAction action, int clientId, int catalogIndex, int count,
@@ -4401,8 +4458,8 @@ namespace Kue.Internal
             case PlayerAction.Kill:
                 KillPlayerManaged(PlayerByClientId(clientId));
                 break;
-            case PlayerAction.HealSelf:
-                HealSelfManaged();
+            case PlayerAction.Heal:
+                HealPlayerManaged(PlayerByClientId(clientId));
                 break;
             case PlayerAction.KillAll:
             case PlayerAction.KillAllExceptLocal:
@@ -4662,11 +4719,12 @@ namespace Kue.Internal
             mark.kind = kind;
             mark.owner = rendererRoot;
             mark.marker = marker;
-            mark.renderers = CachedRenderers(rendererRoot);
+            mark.renderers = CachedRenderers(rendererRoot, kind == MarkKind.Ship);
             mark.color = color;
             mark.value = value;
             mark.enabled = enabled;
             mark.portal = portal;
+            mark.portalBox = portal ? rendererRoot.GetComponent<BoxCollider>() : null;
             mark.rendererRadius = rendererRadius;
         }
 
@@ -4690,10 +4748,11 @@ namespace Kue.Internal
             mark.value = -1;
             mark.enabled = enabled;
             mark.portal = false;
+            mark.portalBox = null;
             mark.rendererRadius = 7f;
         }
 
-        private Renderer[] CachedRenderers(Component root)
+        private Renderer[] CachedRenderers(Component root, bool structureOnly)
         {
             int instanceId = root.GetInstanceID();
             activeRendererRoots.Add(instanceId);
@@ -4701,9 +4760,23 @@ namespace Kue.Internal
             if (rendererCache.TryGetValue(instanceId, out entry) && entry.owner == root)
                 return entry.renderers;
             entry =
-                new RendererCacheEntry { owner = root, renderers = HighestDetailRenderers(root) };
+                new RendererCacheEntry { owner = root,
+                                         renderers = structureOnly ? StructureRenderers(root)
+                                                                   : HighestDetailRenderers(root) };
             rendererCache[instanceId] = entry;
             return entry.renderers;
+        }
+
+        private static Renderer[] StructureRenderers(Component root)
+        {
+            List<Renderer> kept = new List<Renderer>();
+            foreach (Renderer renderer in HighestDetailRenderers(root))
+                if (renderer.GetComponentInParent<GrabbableObject>(true) == null &&
+                    renderer.GetComponentInParent<PlayerControllerB>(true) == null &&
+                    renderer.GetComponentInParent<EnemyAI>(true) == null &&
+                    renderer.GetComponentInParent<VehicleController>(true) == null)
+                    kept.Add(renderer);
+            return kept.ToArray();
         }
 
         private static Renderer[] HighestDetailRenderers(Component root)
@@ -4742,6 +4815,11 @@ namespace Kue.Internal
             if (unseenEnemies >= 0)
                 layers |= 1 << unseenEnemies;
             return layers;
+        }
+
+        private static bool ShownModelRenderer(Renderer renderer, int visibleLayers)
+        {
+            return ModelRenderer(renderer, visibleLayers) && renderer.gameObject.activeInHierarchy;
         }
 
         private static bool ModelRenderer(Renderer renderer, int visibleLayers)
@@ -4878,22 +4956,23 @@ namespace Kue.Internal
             }
 
             HangarShipDoor shipDoor = UnityEngine.Object.FindObjectOfType<HangarShipDoor>();
+            Transform shipHull = round != null ? round.elevatorTransform : null;
+            if (shipHull == null && round != null && round.shipBounds != null)
+                shipHull = round.shipBounds.transform.parent != null
+                               ? round.shipBounds.transform.parent
+                               : round.shipBounds.transform;
             if (shipDoor != null)
             {
                 Component shipRoot = shipDoor;
-                if (local != null && !local.isInHangarShipRoom && round != null &&
-                    round.shipBounds != null && round.shipBounds.transform.parent != null)
-                    shipRoot = round.shipBounds.transform.parent;
+                if (local != null && !local.isInHangarShipRoom && shipHull != null)
+                    shipRoot = shipHull;
                 Add("Ship", shipDoor.transform, shipRoot, outlineColors[5], Flag(5), -1, false,
-                    100f);
+                    ShipOutlineRadius, MarkKind.Ship);
             }
-            else if (round != null && round.shipBounds != null)
+            else if (shipHull != null)
             {
-                Transform root = round.shipBounds.transform.parent != null
-                                     ? round.shipBounds.transform.parent
-                                     : round.shipBounds.transform;
-                Add("Ship", round.shipBounds.transform, root, outlineColors[5], Flag(5), -1, false,
-                    100f);
+                Add("Ship", shipHull, shipHull, outlineColors[5], Flag(5), -1, false,
+                    ShipOutlineRadius, MarkKind.Ship);
             }
             for (int i = markCount; i < marks.Count; i++)
             {
@@ -5135,7 +5214,7 @@ namespace Kue.Internal
             int visibleLayers = PlayerVisibleLayers(camera);
             foreach (Renderer renderer in mark.renderers)
             {
-                if (!ModelRenderer(renderer, visibleLayers))
+                if (!ShownModelRenderer(renderer, visibleLayers))
                     continue;
                 Bounds bounds = renderer.bounds;
                 if (limitRadius && (bounds.extents.sqrMagnitude > radiusSquared ||
@@ -5188,17 +5267,56 @@ namespace Kue.Internal
                 DrawLine(hullVertices[i], hullVertices[(i + 1) % hullVertices.Count], color, 2f);
         }
 
+        private void DoorwayCorners(BoxCollider box, Vector3 arrivalPoint)
+        {
+            Transform frame = box.transform;
+            Vector3 center = frame.TransformPoint(box.center);
+            Vector3 halfSize = box.size * 0.5f;
+            Vector3[] halfAxes = { frame.TransformVector(new Vector3(halfSize.x, 0f, 0f)),
+                                   frame.TransformVector(new Vector3(0f, halfSize.y, 0f)),
+                                   frame.TransformVector(new Vector3(0f, 0f, halfSize.z)) };
+            int upright = 0;
+            for (int axis = 1; axis < 3; axis++)
+                if (Mathf.Abs(halfAxes[axis].normalized.y) >
+                    Mathf.Abs(halfAxes[upright].normalized.y))
+                    upright = axis;
+            int first = (upright + 1) % 3;
+            int second = (upright + 2) % 3;
+            Vector3 toArrival = arrivalPoint - center;
+            toArrival.y = 0f;
+            float firstFacing = Mathf.Abs(Vector3.Dot(halfAxes[first].normalized, toArrival));
+            float secondFacing = Mathf.Abs(Vector3.Dot(halfAxes[second].normalized, toArrival));
+            bool firstIsDepth = Mathf.Approximately(firstFacing, secondFacing)
+                                    ? halfAxes[first].sqrMagnitude < halfAxes[second].sqrMagnitude
+                                    : firstFacing > secondFacing;
+            Vector3 across = halfAxes[firstIsDepth ? second : first];
+            Vector3 up = halfAxes[upright];
+            if (up.y < 0f)
+                up = -up;
+            portalWorldCorners[0] = center - across - up;
+            portalWorldCorners[1] = center + across - up;
+            portalWorldCorners[2] = center + across + up;
+            portalWorldCorners[3] = center - across + up;
+        }
+
         private void DrawPortalOutline(Camera camera, Mark mark, Color color)
         {
             if (mark.marker == null)
                 return;
-            Vector3 baseCenter = mark.marker.position + Vector3.up * 0.08f;
-            Vector3 right = mark.marker.right.normalized * 1.15f;
-            Vector3 up = Vector3.up * 2.65f;
-            portalWorldCorners[0] = baseCenter - right;
-            portalWorldCorners[1] = baseCenter + right;
-            portalWorldCorners[2] = baseCenter + right + up;
-            portalWorldCorners[3] = baseCenter - right + up;
+            if (mark.portalBox != null)
+            {
+                DoorwayCorners(mark.portalBox, mark.marker.position);
+            }
+            else
+            {
+                Vector3 baseCenter = mark.marker.position + Vector3.up * 0.08f;
+                Vector3 right = mark.marker.right.normalized * 1.15f;
+                Vector3 up = Vector3.up * 2.65f;
+                portalWorldCorners[0] = baseCenter - right;
+                portalWorldCorners[1] = baseCenter + right;
+                portalWorldCorners[2] = baseCenter + right + up;
+                portalWorldCorners[3] = baseCenter - right + up;
+            }
             for (int i = 0; i < portalWorldCorners.Length; i++)
             {
                 Vector3 viewport = camera.WorldToViewportPoint(portalWorldCorners[i]);

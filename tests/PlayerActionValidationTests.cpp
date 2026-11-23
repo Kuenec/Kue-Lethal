@@ -43,7 +43,7 @@ struct ActionContract {
 constexpr std::array<ActionContract, 50> kActionContracts{{
     {kue::PlayerAction::TeleportTo, kue::PlayerActionPayloadKind::PlayerTarget, "TeleportTo"},
     {kue::PlayerAction::Kill, kue::PlayerActionPayloadKind::PlayerTarget, "Kill"},
-    {kue::PlayerAction::HealSelf, kue::PlayerActionPayloadKind::None, "HealSelf"},
+    {kue::PlayerAction::Heal, kue::PlayerActionPayloadKind::PlayerTarget, "Heal"},
     {kue::PlayerAction::KillAll, kue::PlayerActionPayloadKind::None, "KillAll"},
     {kue::PlayerAction::KillAllExceptLocal, kue::PlayerActionPayloadKind::None,
      "KillAllExceptLocal"},

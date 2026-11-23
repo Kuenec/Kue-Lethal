@@ -22,6 +22,7 @@
 #include <cstdlib>
 #include <iostream>
 #include <limits>
+#include <memory>
 #include <new>
 #include <optional>
 #include <string>
@@ -201,12 +202,14 @@ struct ScreenPoint {
     float y;
 };
 
-constexpr ScreenPoint kStaminaSwitch{897.f, 399.f};
-constexpr ScreenPoint kPlayersPage{667.f, 453.f};
-constexpr ScreenPoint kItemsPage{667.f, 513.f};
-constexpr ScreenPoint kSettingsPage{667.f, 603.f};
-constexpr ScreenPoint kKillPlayer{1097.f, 453.f};
-constexpr ScreenPoint kSaveSettings{877.f, 521.f};
+constexpr ScreenPoint kStaminaSwitch{807.f, 359.f};
+constexpr ScreenPoint kPlayersPage{577.f, 413.f};
+constexpr ScreenPoint kItemsPage{577.f, 473.f};
+constexpr ScreenPoint kSettingsPage{577.f, 563.f};
+constexpr ScreenPoint kMoonsPage{577.f, 503.f};
+constexpr ScreenPoint kTeleportToSelf{1007.f, 413.f};
+constexpr ScreenPoint kKillPlayer{1007.f, 439.f};
+constexpr ScreenPoint kSaveSettings{787.f, 481.f};
 
 struct PointerInput {
     float x = -1000.f;
@@ -270,7 +273,7 @@ class HudHarness final {
 
         RenderResult result{};
         result.status =
-            transaction.commit(mRenderer, drawData, transaction.interface().menuRectangle(),
+            transaction.commit(*mRenderer, drawData, transaction.interface().menuRectangle(),
                                {1920, 1080}, mInterface, mConfig, result.frame, result.effects);
         return result;
     }
@@ -292,7 +295,7 @@ class HudHarness final {
 
     [[nodiscard]] kue::ui::Interface& interface() noexcept { return mInterface; }
 
-    [[nodiscard]] kue::internalhud::InternalHudRenderer& renderer() noexcept { return mRenderer; }
+    [[nodiscard]] kue::internalhud::InternalHudRenderer& renderer() noexcept { return *mRenderer; }
 
   private:
     void createContext() {
@@ -329,8 +332,8 @@ class HudHarness final {
         io.Fonts->SetTexID(static_cast<ImTextureID>(1));
         const std::size_t bytes =
             static_cast<std::size_t>(width) * static_cast<std::size_t>(height) * std::size_t{4};
-        if (mRenderer.setFontAtlas({std::span<const std::uint8_t>{pixels, bytes}, width, height}) !=
-            kue::internalhud::MenuRasterStatus::Success) {
+        if (mRenderer->setFontAtlas({std::span<const std::uint8_t>{pixels, bytes}, width,
+                                     height}) != kue::internalhud::MenuRasterStatus::Success) {
             std::abort();
         }
         kue::ui::setFonts({.body = body, .title = title, .caption = caption});
@@ -342,14 +345,15 @@ class HudHarness final {
             return;
         ImGui::SetCurrentContext(mContext);
         kue::ui::setFonts({.body = nullptr, .title = nullptr, .caption = nullptr});
-        mRenderer.clearFontAtlas();
+        mRenderer->clearFontAtlas();
         ImGui::DestroyContext(mContext);
         mContext = nullptr;
     }
 
     kue::Config mConfig;
     kue::ui::Interface mInterface;
-    kue::internalhud::InternalHudRenderer mRenderer;
+    std::unique_ptr<kue::internalhud::InternalHudRenderer> mRenderer =
+        std::make_unique<kue::internalhud::InternalHudRenderer>();
     kue::MenuSnapshot mSnapshot;
     ImGuiContext* mContext = nullptr;
 };
@@ -375,16 +379,16 @@ void testExactPixelsAndConsumerRecovery(TestRun& run) {
     const RenderResult first = harness.render();
     run.expect(first.status == kue::internalhud::MenuRasterStatus::Success,
                "the representative menu raster succeeds");
-    run.expect(first.frame.width == 726 && first.frame.height == 446,
+    run.expect(first.frame.width == 906 && first.frame.height == 526,
                "the representative menu preserves its exact crop");
-    run.expect(first.frame.pixels.size() == 1295184,
+    run.expect(first.frame.pixels.size() == 1906224,
                "the representative menu publishes every RGBA byte");
     run.expect(first.frame.revision != 0,
                "the first accepted pixels carry a nonzero consumer revision");
     const std::uint64_t hash = pixelHash(first.frame);
-    if (hash != 2276392010785326953ULL)
+    if (hash != 2663227275962476376ULL)
         std::cerr << "actual pixel hash: " << hash << '\n';
-    run.expect(hash == 2276392010785326953ULL,
+    run.expect(hash == 2663227275962476376ULL,
                "the representative menu preserves its exact RGBA hash");
 
     RenderResult previous = first;
@@ -436,17 +440,17 @@ void testExactPixelsAndConsumerRecovery(TestRun& run) {
 }
 
 void testFontBoundaryValidation(TestRun& run) {
-    kue::internalhud::InternalHudRenderer renderer;
+    const auto renderer = std::make_unique<kue::internalhud::InternalHudRenderer>();
     std::array<std::uint8_t, 4> pixel{};
-    run.expect(renderer.setFontAtlas({pixel, 0, 1}) ==
+    run.expect(renderer->setFontAtlas({pixel, 0, 1}) ==
                    kue::internalhud::MenuRasterStatus::InvalidFont,
                "a zero-width font atlas is rejected");
-    run.expect(renderer.setFontAtlas({pixel, 1, 1}) == kue::internalhud::MenuRasterStatus::Success,
+    run.expect(renderer->setFontAtlas({pixel, 1, 1}) == kue::internalhud::MenuRasterStatus::Success,
                "an exact one-pixel RGBA font atlas is accepted");
-    run.expect(renderer.setFontAtlas({std::span<const std::uint8_t>{pixel.data(), 3}, 1, 1}) ==
+    run.expect(renderer->setFontAtlas({std::span<const std::uint8_t>{pixel.data(), 3}, 1, 1}) ==
                    kue::internalhud::MenuRasterStatus::InvalidFont,
                "a truncated font atlas is rejected");
-    run.expect(renderer.setFontAtlas({pixel, 8193, 1}) ==
+    run.expect(renderer->setFontAtlas({pixel, 8193, 1}) ==
                    kue::internalhud::MenuRasterStatus::InvalidFont,
                "an oversized font dimension is rejected before byte multiplication");
 }
@@ -695,6 +699,15 @@ void testRejectedActionAndSaveState(TestRun& run) {
         run.expect(!harness.interface().readAction(action),
                    "a rejected action click cannot leak into the live action output");
 
+        static_cast<void>(successfulRender(run, harness,
+                                           {kTeleportToSelf.x, kTeleportToSelf.y, true, 0.f},
+                                           "the unavailable action press renders"));
+        static_cast<void>(successfulRender(run, harness,
+                                           {kTeleportToSelf.x, kTeleportToSelf.y, false, 0.f},
+                                           "the unavailable action release renders"));
+        run.expect(!harness.interface().readAction(action),
+                   "a listed action that cannot work here queues nothing when clicked");
+
         harness.recreateContext();
         static_cast<void>(successfulRender(run, harness, {},
                                            "the recreated action rejection fixture initializes"));
@@ -794,6 +807,27 @@ void testModelPreviewRequest(TestRun& run) {
                        preview->rectangle.x + preview->rectangle.width <= menu.x + menu.width &&
                        preview->rectangle.y + preview->rectangle.height <= menu.y + menu.height,
                    "the preview box lies inside the menu");
+    }
+    run.expect(gCatalogs.beginMoonCatalog() == kue::CatalogBeginResult::Begun,
+               "a preview moon catalog begins");
+    run.expect(gCatalogs.reportMoon({903U}, {"41 Experimentation"}).result ==
+                   kue::CatalogReportResult::Recorded,
+               "a preview moon is staged");
+    run.expect(gCatalogs.commitMoonCatalog().result == kue::CatalogCommitResult::Committed,
+               "a preview moon catalog commits");
+    {
+        HudHarness harness;
+        harness.setWorldFeature(kue::WorldFeature::ModelPreviews);
+        static_cast<void>(successfulRender(run, harness, {}, "the moon fixture initializes"));
+        static_cast<void>(successfulRender(run, harness, {kMoonsPage.x, kMoonsPage.y, true, 0.f},
+                                           "the moons-page press renders"));
+        static_cast<void>(successfulRender(run, harness, {kMoonsPage.x, kMoonsPage.y, false, 0.f},
+                                           "the moons-page release renders"));
+        static_cast<void>(successfulRender(run, harness, {}, "the moons page settles"));
+        const std::optional<kue::ui::MenuPreview> preview = harness.interface().preview();
+        run.expect(preview && preview->kind == kue::ui::PreviewKind::Moon &&
+                       preview->catalogIndex == 0U,
+                   "the moons page requests a preview of the selected moon");
     }
     gCatalogs.resetForSessionEnd();
 }

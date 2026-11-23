@@ -10,11 +10,11 @@ This is a personal project. It works well for me; it may or may not work for you
 |---|---|
 | Self | Infinite stamina, no carry weight, infinite battery, extended inventory, fly (with flapping arms), emote while moving, third person, hear every player's voice anywhere, heal, kill |
 | Visuals | ESP for players, scrap, enemies, entrances, fire exits, and the ship, with model outlines, names, scrap values, distances, tracer lines, and per-category colors |
-| Players | Teleport to a player, kill, insanity control, a 30-second enemy lure, persistent targeting, and teleporting enemies to a player |
+| Players | Teleport to a player, kill, heal, insanity control, a 30-second enemy lure, persistent targeting, and teleporting enemies to a player |
 | Enemies | Spawn any installed enemy type in its own area or near a player at a chosen distance, place turrets, landmines, and other traps near a player, bring living enemies to a player, stun or kill everything |
 | Items | Spawn any installed item with its normal or a fixed scrap value, bring loose items to a player, put all ship scrap on the company counter, add terminal credits (host) |
 | Moons | Route the ship to any moon the game knows, including ones the terminal hides, free of charge |
-| World | Ship, cruiser, company, facility, landmine, turret, bridge, shotgun, jetpack, and mask actions |
+| Trolls | Ship, cruiser, company, facility, landmine, turret, bridge, shotgun, jetpack, and mask actions |
 
 Enemy, item, trap, and moon lists are read from the installed game assets at runtime and rescanned while you play, so new content shows up without an update here. An enemy type is only offered where it can function: outside types outside, facility types in the facility, and only on maps that have the navigation nodes it needs. ESP outlines are rendered by the game's own pipeline, which means they follow the model exactly and stay visible through walls.
 
@@ -98,10 +98,10 @@ Press Insert to open or close the menu. Escape also closes it and restores the g
 - **Enemies**: enemy and trap spawning, and actions on every living enemy
 - **Items**: spawning, moving items, the company counter, and terminal credits
 - **Moons**: pick any known moon and route the ship there while in orbit
-- **World**: ship, cruiser, company, facility, and gear controls
+- **Trolls**: ship, cruiser, company, facility, and gear controls
 - **Settings**: menu key, update rates, saving, and a list of the keys in use
 
-The enemy, trap, and item lists show a slowly turning model of the selected entry. The menu only shows what is possible right now. Host-only controls are hidden while you are a client, and controls for things that are not on the map, such as landmines, a cruiser, or the company counter, appear when those things exist. Hover a control to read what it does in the bar at the bottom.
+The enemy, trap, item, and moon pages show a slowly turning model of the selected entry in a panel beside the list. Entries that are only a particle effect, such as the locust swarm, have no solid model and say so. Every control is always listed. One that cannot work right now is dimmed and names the reason on its row, such as host only, orbit only, or no landmines here, and clicking it does nothing. Hover a control to read what it does in the bar at the bottom.
 
 ## Configuration
 

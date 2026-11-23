@@ -19,8 +19,8 @@ namespace kue::ui {
 
 namespace {
 
-constexpr float kMenuWidth = 720.f;
-constexpr float kMenuHeight = 440.f;
+constexpr float kMenuWidth = 900.f;
+constexpr float kMenuHeight = 520.f;
 constexpr float kSidebarWidth = 132.f;
 constexpr float kHeaderHeight = 38.f;
 constexpr float kFooterHeight = 26.f;
@@ -29,8 +29,8 @@ constexpr float kColumnGap = 10.f;
 constexpr float kRowHeight = 24.f;
 constexpr float kListRowHeight = 20.f;
 constexpr float kCardPadding = 6.f;
-constexpr float kListWidth = 236.f;
-constexpr float kPreviewHeight = 140.f;
+constexpr float kListWidth = 200.f;
+constexpr float kControlsWidth = 276.f;
 constexpr float kLabelWidth = 104.f;
 constexpr float kPoundsPerCarryUnit = 105.f;
 
@@ -80,7 +80,7 @@ enum class Icon : std::uint8_t {
     Enemies,
     Items,
     Moons,
-    World,
+    Trolls,
     Settings,
     Chevron,
     Sun,
@@ -206,12 +206,18 @@ void drawIcon(ImDrawList* drawList, Icon icon, ImVec2 center, ImU32 tint, float 
         pen.line({-7.f, 2.6f}, {-4.4f, 1.6f});
         pen.line({4.4f, -1.6f}, {7.f, -2.6f});
         return;
-    case Icon::World:
-        pen.ring({0.f, 0.f}, 5.6f);
-        drawList->AddEllipse(center, ImVec2(2.5f * scale, 5.6f * scale), tint, 0.f, 14,
-                             kIconStroke);
-        pen.line({-5.6f, 0.f}, {5.6f, 0.f});
+    case Icon::Trolls: {
+        constexpr std::array<ImVec2, 3> leftHorn = {
+            {{-4.7f, -1.6f}, {-5.6f, -6.4f}, {-2.f, -4.2f}}};
+        constexpr std::array<ImVec2, 3> rightHorn = {{{4.7f, -1.6f}, {5.6f, -6.4f}, {2.f, -4.2f}}};
+        pen.ring({0.f, 0.8f}, 5.2f);
+        pen.path(leftHorn, ImDrawFlags_None);
+        pen.path(rightHorn, ImDrawFlags_None);
+        pen.dot({-2.f, -0.2f}, 1.f);
+        pen.dot({2.f, -0.2f}, 1.f);
+        pen.arc({0.f, 1.2f}, 2.8f, 0.15f, 0.85f);
         return;
+    }
     case Icon::Settings:
         pen.line({-6.f, -4.f}, {6.f, -4.f});
         pen.line({-6.f, 0.f}, {6.f, 0.f});
@@ -417,9 +423,11 @@ void noteText(const char* text) {
         ImGui::PushFont(caption);
     }
     ImGui::PushStyleColor(ImGuiCol_Text, palette::kMuted);
-    ImGui::PushTextWrapPos(0.f);
+    ImGui::Indent(8.f);
+    ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x - 8.f);
     ImGui::TextUnformatted(text);
     ImGui::PopTextWrapPos();
+    ImGui::Unindent(8.f);
     ImGui::PopStyleColor();
     if (caption) {
         ImGui::PopFont();
@@ -477,6 +485,26 @@ bool commandRow(const char* label, CommandTone tone) {
              ImVec2(maximum.x - 12.f, (minimum.y + maximum.y) * 0.5f),
              color(danger ? palette::kDanger : palette::kFaint));
     return pressed;
+}
+
+void unavailableRow(const char* label, const char* reason) {
+    ImGui::PushID(label);
+    ImGui::InvisibleButton("##unavailable", ImVec2(ImGui::GetContentRegionAvail().x, kRowHeight));
+    ImGui::PopID();
+    ImDrawList* const drawList = ImGui::GetWindowDrawList();
+    const ImVec2 minimum = ImGui::GetItemRectMin();
+    const ImVec2 maximum = ImGui::GetItemRectMax();
+    ImFont* const caption = fonts().caption ? fonts().caption : ImGui::GetFont();
+    const ImVec2 reasonSize = caption->CalcTextSizeA(caption->FontSize, 1000.f, 0.f, reason);
+    const float reasonX = maximum.x - reasonSize.x - 8.f;
+    const ImVec4 clip(minimum.x, minimum.y, reasonX - 8.f, maximum.y);
+    drawList->AddText(
+        ImGui::GetFont(), ImGui::GetFontSize(),
+        ImVec2(minimum.x + 8.f, minimum.y + (kRowHeight - ImGui::GetFontSize()) * 0.5f),
+        color(palette::kDisabled), label, nullptr, 0.f, &clip);
+    drawList->AddText(caption, caption->FontSize,
+                      ImVec2(reasonX, minimum.y + (kRowHeight - caption->FontSize) * 0.5f),
+                      color(palette::kMuted), reason);
 }
 
 struct IntRange {
@@ -735,21 +763,41 @@ void Interface::configSwitch(const char* label, const char* hint, bool& value) {
     noteHint(mHint, hint);
 }
 
-void Interface::sessionSwitch(const char* label, const char* hint, bool on, PlayerAction action) {
+void Interface::blockedRow(const char* label, const char* hint, const char* reason) {
+    unavailableRow(label, reason);
+    noteHint(mHint, hint);
+}
+
+void Interface::sessionSwitch(const char* label, const char* hint, bool on,
+                              PlayerActionRequest request, const char* blocked) {
+    if (blocked) {
+        blockedRow(label, hint, blocked);
+        return;
+    }
     if (switchRow(label, on)) {
-        queueAction({action, NoPlayerActionPayload{}});
+        queueAction(request);
     }
     noteHint(mHint, hint);
 }
 
-void Interface::command(const char* label, const char* hint, PlayerActionRequest request) {
+void Interface::command(const char* label, const char* hint, PlayerActionRequest request,
+                        const char* blocked) {
+    if (blocked) {
+        blockedRow(label, hint, blocked);
+        return;
+    }
     if (commandRow(label, CommandTone::Neutral)) {
         queueAction(request);
     }
     noteHint(mHint, hint);
 }
 
-void Interface::dangerCommand(const char* label, const char* hint, PlayerActionRequest request) {
+void Interface::dangerCommand(const char* label, const char* hint, PlayerActionRequest request,
+                              const char* blocked) {
+    if (blocked) {
+        blockedRow(label, hint, blocked);
+        return;
+    }
     if (commandRow(label, CommandTone::Danger)) {
         queueAction(request);
     }
@@ -854,8 +902,8 @@ void Interface::render(const MenuSnapshot& snapshot, const RuntimeCatalogs& cata
         case MenuPage::Moons:
             drawMoonsPage(snapshot, catalogs);
             break;
-        case MenuPage::World:
-            drawWorldPage(snapshot);
+        case MenuPage::Trolls:
+            drawTrollsPage(snapshot);
             break;
         case MenuPage::Settings:
             drawSettingsPage(configuration, frame);
@@ -885,7 +933,7 @@ void Interface::drawSidebar() {
         {MenuPage::Enemies, Icon::Enemies, "Enemies"},
         {MenuPage::Items, Icon::Items, "Items"},
         {MenuPage::Moons, Icon::Moons, "Moons"},
-        {MenuPage::World, Icon::World, "World"},
+        {MenuPage::Trolls, Icon::Trolls, "Trolls"},
         {MenuPage::Settings, Icon::Settings, "Settings"},
     }};
 
@@ -955,9 +1003,9 @@ void Interface::drawHeader(const MenuSnapshot& snapshot, const MenuFrame& frame)
         title = "Moons";
         icon = Icon::Moons;
         break;
-    case MenuPage::World:
-        title = "World";
-        icon = Icon::World;
+    case MenuPage::Trolls:
+        title = "Trolls";
+        icon = Icon::Trolls;
         break;
     case MenuPage::Settings:
         title = "Settings";
@@ -1076,24 +1124,6 @@ void Interface::drawPlayerPicker(PlayerPicker picker, const MenuSnapshot& snapsh
     ImGui::EndChild();
 }
 
-void Interface::drawPreview(PreviewKind kind, std::optional<std::size_t> catalogIndex) {
-    ImGui::Dummy(ImVec2(0.f, kColumnGap - ImGui::GetStyle().ItemSpacing.y * 2.f));
-    if (beginCard("##preview", ImVec2(kListWidth, kPreviewHeight))) {
-        sectionTitle(Icon::Visuals, "MODEL");
-        const ImVec2 position = ImGui::GetCursorScreenPos();
-        const ImVec2 size = ImGui::GetContentRegionAvail();
-        drawIcon(ImGui::GetWindowDrawList(), Icon::Items,
-                 ImVec2(position.x + size.x * 0.5f, position.y + size.y * 0.5f),
-                 color(palette::kFaint), 1.6f);
-        if (catalogIndex && size.x > 0.f && size.y > 0.f) {
-            mPreview = MenuPreview{kind,
-                                   static_cast<std::uint16_t>(*catalogIndex),
-                                   {position.x, position.y, size.x, size.y}};
-        }
-    }
-    ImGui::EndChild();
-}
-
 void Interface::drawSelfPage(const MenuSnapshot& snapshot, MenuConfiguration& configuration) {
     const SessionState& session = snapshot.session;
     const float width = columnWidth();
@@ -1123,11 +1153,11 @@ void Interface::drawSelfPage(const MenuSnapshot& snapshot, MenuConfiguration& co
         sectionTitle(Icon::Sound, "SENSES");
         sessionSwitch("Third person", "Moves your camera behind your own character.",
                       session.switches.has(SessionSwitch::ThirdPerson),
-                      PlayerAction::ToggleThirdPerson);
+                      {PlayerAction::ToggleThirdPerson, NoPlayerActionPayload{}});
         sessionSwitch("Hear everyone",
                       "Plays every player's voice at full volume, any distance, alive or dead.",
                       session.switches.has(SessionSwitch::HearEveryone),
-                      PlayerAction::ToggleHearEveryone);
+                      {PlayerAction::ToggleHearEveryone, NoPlayerActionPayload{}});
     }
     ImGui::EndChild();
     ImGui::SameLine(0.f, kColumnGap);
@@ -1142,19 +1172,21 @@ void Interface::drawSelfPage(const MenuSnapshot& snapshot, MenuConfiguration& co
                       static_cast<double>(carried * kPoundsPerCarryUnit));
         meterRow("Carried weight", value.data(), carried);
         const PlayerSnapshotPlayer* const local = localPlayer(snapshot.playerFrame.players);
-        if (local && local->dead) {
-            noteText("You are dead. Your actions return when you are alive again.");
-        } else if (local) {
-            std::snprintf(value.data(), value.size(), "%d", local->health);
-            meterRow("Health", value.data(), static_cast<float>(local->health) / 100.f);
-            sectionTitle(Icon::Bolt, "ACTIONS");
-            command("Heal yourself", "Restores your health to full and stops bleeding.",
-                    {PlayerAction::HealSelf, NoPlayerActionPayload{}});
-            dangerCommand("Kill yourself", "Kills your own character right now.",
-                          {PlayerAction::Kill, PlayerTargetPayload{local->clientId}});
-        } else {
-            noteText("Join a game to see your character.");
+        const int health = local && !local->dead ? local->health : 0;
+        std::snprintf(value.data(), value.size(), "%d", health);
+        meterRow("Health", value.data(), static_cast<float>(health) / 100.f);
+        sectionTitle(Icon::Bolt, "ACTIONS");
+        const char* blocked = nullptr;
+        if (!local) {
+            blocked = "not in a game";
+        } else if (local->dead) {
+            blocked = "you are dead";
         }
+        const PlayerTargetPayload self{local ? local->clientId : 0};
+        command("Heal yourself", "Restores your health to full and stops bleeding.",
+                {PlayerAction::Heal, self}, blocked);
+        dangerCommand("Kill yourself", "Kills your own character right now.",
+                      {PlayerAction::Kill, self}, blocked);
     }
     ImGui::EndChild();
 }
@@ -1253,6 +1285,49 @@ void Interface::drawVisualsPage(MenuConfiguration& configuration) {
     ImGui::EndChild();
 }
 
+void Interface::drawModelPanel(const MenuSnapshot& snapshot, PreviewKind kind,
+                               std::optional<std::size_t> catalogIndex, std::string_view name) {
+    if (beginCard("##model", ImVec2(0.f, 0.f))) {
+        sectionTitle(Icon::Visuals, "MODEL");
+        ImDrawList* const drawList = ImGui::GetWindowDrawList();
+        const ImVec2 position = ImGui::GetCursorScreenPos();
+        ImVec2 size = ImGui::GetContentRegionAvail();
+        size.y -= kRowHeight;
+        const ImVec2 middle(position.x + size.x * 0.5f, position.y + size.y * 0.5f);
+        drawIcon(drawList, Icon::Items, middle, color(palette::kFaint), 1.6f);
+        const char* note = nullptr;
+        if (!catalogIndex) {
+            note = "Nothing selected";
+        } else if (snapshot.session.world.has(WorldFeature::ModelMissing)) {
+            note = "No solid model to show";
+        }
+        if (catalogIndex && size.x > 0.f && size.y > 0.f) {
+            mPreview = MenuPreview{kind,
+                                   static_cast<std::uint16_t>(*catalogIndex),
+                                   {position.x, position.y, size.x, size.y}};
+        }
+        ImFont* const caption = fonts().caption;
+        if (note && caption) {
+            const ImVec2 noteSize = caption->CalcTextSizeA(caption->FontSize, 1000.f, 0.f, note);
+            drawList->AddText(caption, caption->FontSize,
+                              ImVec2(middle.x - noteSize.x * 0.5f, middle.y + 18.f),
+                              color(palette::kMuted), note);
+        }
+        if (catalogIndex && !name.empty()) {
+            const char* const begin = name.data();
+            const char* const end = begin + name.size();
+            const ImVec2 nameSize = ImGui::CalcTextSize(begin, end);
+            const float bottom = position.y + size.y;
+            const ImVec4 clip(position.x, bottom, position.x + size.x, bottom + kRowHeight);
+            drawList->AddText(ImGui::GetFont(), ImGui::GetFontSize(),
+                              ImVec2(position.x + std::max(0.f, (size.x - nameSize.x) * 0.5f),
+                                     bottom + (kRowHeight - ImGui::GetFontSize()) * 0.5f),
+                              color(palette::kText), begin, end, 0.f, &clip);
+        }
+    }
+    ImGui::EndChild();
+}
+
 void Interface::drawPlayersPage(const MenuSnapshot& snapshot) {
     const SessionState& session = snapshot.session;
     const PlayerSnapshot& players = snapshot.playerFrame.players;
@@ -1267,7 +1342,7 @@ void Interface::drawPlayersPage(const MenuSnapshot& snapshot) {
         mSelectedPlayer = players[0].clientId;
     }
 
-    if (beginCard("##player_list", ImVec2(190.f, 0.f))) {
+    if (beginCard("##player_list", ImVec2(kListWidth, 0.f))) {
         sectionTitle(Icon::Players, "PLAYERS");
         for (const PlayerSnapshotPlayer& player : players) {
             const std::array<char, kPlayerListLabelCapacity> label = playerListLabel(player);
@@ -1292,8 +1367,12 @@ void Interface::drawPlayersPage(const MenuSnapshot& snapshot) {
     }
     const PlayerSnapshotPlayer& player = *selected;
     const PlayerTargetPayload target{player.clientId};
+    const NoPlayerActionPayload none{};
     const bool host = session.world.has(WorldFeature::Host);
     const bool canDie = session.world.has(WorldFeature::PlayersCanDie);
+    const char* const dead = player.dead ? "player is dead" : nullptr;
+    const char* const orbit = "blocked in orbit";
+    const char* const remoteOrbit = player.local || canDie ? nullptr : orbit;
 
     sectionTitle(Icon::Info, "DETAILS");
     ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 8.f);
@@ -1306,75 +1385,65 @@ void Interface::drawPlayersPage(const MenuSnapshot& snapshot) {
     } else {
         ImGui::TextColored(palette::kGood, "Alive");
         ImGui::SameLine();
-        ImGui::TextColored(palette::kMuted, "\xC2\xB7   %d health   \xC2\xB7   %s", player.health,
+        ImGui::TextColored(palette::kMuted,
+                           "\xC2\xB7   %d health   \xC2\xB7   %.0f insanity   \xC2\xB7   %s",
+                           player.health, static_cast<double>(player.insanity),
                            locationName(session.location(player.clientId)));
     }
 
-    if (!player.dead) {
-        sectionTitle(Icon::Self, "PLAYER");
-        if (!player.local) {
-            command("Teleport to player", "Moves you to where this player is standing.",
-                    {PlayerAction::TeleportTo, target});
-        }
-        if (player.local || canDie) {
-            dangerCommand("Kill player", "Deals lethal damage so the player dies normally.",
-                          {PlayerAction::Kill, target});
-        }
-        if (player.local) {
-            command("Clear insanity", "Resets your fear level to zero.",
-                    {PlayerAction::ClearInsanity, target});
-            command("Max insanity", "Raises your fear level to its maximum.",
-                    {PlayerAction::MaxInsanity, target});
-        } else if (host) {
-            command("Mark for the ghost girl",
-                    "Makes the ghost girl far more likely to pick this player to haunt.",
-                    {PlayerAction::MaxInsanity, target});
-            command("Unmark for the ghost girl", "Removes the ghost girl mark from this player.",
-                    {PlayerAction::ClearInsanity, target});
-        }
-
-        sectionTitle(Icon::Enemies, "ENEMIES");
-        if (session.world.has(WorldFeature::EnemiesAlive)) {
-            const bool luredHere = session.lure && session.lure->clientId == player.clientId;
-            const bool timedLure = luredHere && session.lure->secondsLeft.has_value();
-            const bool persistentLure = luredHere && !session.lure->secondsLeft.has_value();
-            if (switchRow("Lure enemies for 30 s", timedLure)) {
-                queueAction({PlayerAction::LureAllEnemies, target});
-            }
-            noteHint(mHint, "Draws enemies to this player for 30 seconds, then lets them go.");
-            if (switchRow("Persistent targeting", persistentLure)) {
-                queueAction({PlayerAction::TogglePersistentLure, target});
-            }
-            noteHint(mHint,
-                     "Every enemy that can reach this player hunts only them until you turn it "
-                     "off.");
-            command("Teleport enemies here",
-                    "Moves every enemy that lives in this player's area next to them.",
-                    {PlayerAction::TeleportAllEnemies, target});
-        } else {
-            noteText("No living enemies on this map.");
-        }
+    sectionTitle(Icon::Self, "PLAYER");
+    command("Teleport to player", "Moves you to where this player is standing.",
+            {PlayerAction::TeleportTo, target}, player.local ? "that is you" : dead);
+    dangerCommand("Kill player", "Deals lethal damage so the player dies normally.",
+                  {PlayerAction::Kill, target}, dead ? dead : remoteOrbit);
+    command("Heal player",
+            player.local ? "Restores your health to full and stops bleeding."
+                         : "Restores this player's health to full. They hear a hit when it lands.",
+            {PlayerAction::Heal, target}, dead ? dead : remoteOrbit);
+    if (player.local) {
+        command("Clear insanity", "Resets your fear level to zero.",
+                {PlayerAction::ClearInsanity, target}, dead);
+        command("Max insanity", "Raises your fear level to its maximum.",
+                {PlayerAction::MaxInsanity, target}, dead);
+    } else {
+        const char* const blocked = host ? dead : "host only";
+        command("Mark for the ghost girl",
+                "Makes the ghost girl far more likely to pick this player to haunt.",
+                {PlayerAction::MaxInsanity, target}, blocked);
+        command("Unmark for the ghost girl", "Removes the ghost girl mark from this player.",
+                {PlayerAction::ClearInsanity, target}, blocked);
     }
 
-    if (players.size() > 1) {
-        sectionTitle(Icon::Players, "EVERYONE");
-        if (canDie) {
-            dangerCommand("Kill everyone", "Kills every player, including you.",
-                          {PlayerAction::KillAll, NoPlayerActionPayload{}});
-            dangerCommand("Kill everyone but me", "Kills every other player.",
-                          {PlayerAction::KillAllExceptLocal, NoPlayerActionPayload{}});
-        } else {
-            noteText("Other players cannot die while the ship is in orbit.");
-        }
-    }
+    sectionTitle(Icon::Enemies, "ENEMIES");
+    const char* const noEnemies =
+        player.dead
+            ? dead
+            : (session.world.has(WorldFeature::EnemiesAlive) ? nullptr : "no enemies alive");
+    const bool luredHere = session.lure && session.lure->clientId == player.clientId;
+    const bool timedLure = luredHere && session.lure->secondsLeft.has_value();
+    const bool persistentLure = luredHere && !session.lure->secondsLeft.has_value();
+    sessionSwitch("Lure enemies for 30 s",
+                  "Draws enemies to this player for 30 seconds, then lets them go.", timedLure,
+                  {PlayerAction::LureAllEnemies, target}, timedLure ? nullptr : noEnemies);
+    sessionSwitch("Persistent targeting",
+                  "Every enemy that can reach this player hunts only them until you turn it off.",
+                  persistentLure, {PlayerAction::TogglePersistentLure, target},
+                  persistentLure ? nullptr : noEnemies);
+    command("Teleport enemies here",
+            "Moves every enemy that lives in this player's area next to them.",
+            {PlayerAction::TeleportAllEnemies, target}, noEnemies);
+
+    sectionTitle(Icon::Players, "EVERYONE");
+    const bool others = players.size() > 1;
+    dangerCommand("Kill everyone", "Kills every player, including you.",
+                  {PlayerAction::KillAll, none}, others && !canDie ? orbit : nullptr);
+    dangerCommand("Kill everyone but me", "Kills every other player.",
+                  {PlayerAction::KillAllExceptLocal, none},
+                  others ? (canDie ? nullptr : orbit) : "no other players");
     ImGui::EndChild();
 }
 
 void Interface::drawEnemiesPage(const MenuSnapshot& snapshot, const RuntimeCatalogs& catalogs) {
-    const bool host = snapshot.session.world.has(WorldFeature::Host);
-    if (!host) {
-        mSpawnKind = SpawnKind::Enemies;
-    }
     if (mSpawnKind == SpawnKind::Traps) {
         drawTrapTypes(snapshot, catalogs);
     } else {
@@ -1385,6 +1454,7 @@ void Interface::drawEnemiesPage(const MenuSnapshot& snapshot, const RuntimeCatal
 void Interface::drawEnemyTypes(const MenuSnapshot& snapshot, const RuntimeCatalogs& catalogs) {
     const SessionState& session = snapshot.session;
     const bool host = session.world.has(WorldFeature::Host);
+    const bool previews = session.world.has(WorldFeature::ModelPreviews);
     const std::size_t enemyCount = catalogs.enemyCount();
     if (mEnemyTarget && !findPlayer(snapshot.playerFrame.players, *mEnemyTarget)) {
         mEnemyTarget.reset();
@@ -1395,36 +1465,31 @@ void Interface::drawEnemyTypes(const MenuSnapshot& snapshot, const RuntimeCatalo
                               ? EnemyHabitat::Facility
                               : EnemyHabitat::Outside;
     }
-    const auto spawnable = [&](const EnemyCatalogEntry& entry) {
-        return host && entry.traits.loadedMap == EnemyMapSupport::Supported &&
+    const auto livesThere = [&](const EnemyCatalogEntry& entry) {
+        return entry.traits.loadedMap == EnemyMapSupport::Supported &&
                (!requiredHabitat || entry.traits.habitat == *requiredHabitat);
     };
     const auto summonable = [&](const EnemyCatalogEntry& entry) {
         return requiredHabitat && entry.activeCount > 0 && entry.traits.habitat == *requiredHabitat;
     };
 
-    const bool previews = session.world.has(WorldFeature::ModelPreviews);
     std::optional<EnemyCatalogEntry> chosen;
     std::optional<EnemyCatalogEntry> firstListed;
-    ImGui::BeginGroup();
-    if (beginCard("##enemy_types",
-                  ImVec2(kListWidth, previews ? -(kPreviewHeight + kColumnGap) : 0.f))) {
-        if (host) {
-            const float half = (ImGui::GetContentRegionAvail().x - 4.f) * 0.5f;
-            segmentButton("Enemies", true, half);
-            ImGui::SameLine(0.f, 4.f);
-            if (segmentButton("Traps", false, half)) {
-                mSpawnKind = SpawnKind::Traps;
-            }
-            noteHint(mHint, "Turrets, landmines and the other facility traps.");
+    if (beginCard("##enemy_types", ImVec2(kListWidth, 0.f))) {
+        const float half = (ImGui::GetContentRegionAvail().x - 4.f) * 0.5f;
+        segmentButton("Enemies", true, half);
+        ImGui::SameLine(0.f, 4.f);
+        if (segmentButton("Traps", false, half)) {
+            mSpawnKind = SpawnKind::Traps;
         }
-        sectionTitle(Icon::List, host ? "TYPES THAT WORK THERE" : "LIVING TYPES");
+        noteHint(mHint, "Turrets, landmines and the other map traps.");
+        sectionTitle(Icon::List, "TYPES THAT WORK THERE");
         std::array<char, kRuntimeCatalogNameCapacity + 1> label{};
         std::array<char, 24> detail{};
         for (std::size_t index = 0; index < enemyCount; ++index) {
             const EnemyCatalogLookup lookup = catalogs.enemyAt(index);
             if (lookup.result != CatalogLookupResult::Found ||
-                (!spawnable(lookup.entry) && !summonable(lookup.entry))) {
+                (!livesThere(lookup.entry) && !summonable(lookup.entry))) {
                 continue;
             }
             const EnemyCatalogEntry& entry = lookup.entry;
@@ -1453,12 +1518,7 @@ void Interface::drawEnemyTypes(const MenuSnapshot& snapshot, const RuntimeCatalo
             }
         }
         if (!firstListed) {
-            if (!host) {
-                noteText(mEnemyTarget ? "No living enemy can reach this player. Only the host "
-                                        "can create new ones."
-                                      : "Pick a player to bring living enemies to. Only the "
-                                        "host can create new ones.");
-            } else if (enemyCount == 0) {
+            if (enemyCount == 0) {
                 noteText("Enemy types appear once you are in a lobby.");
             } else {
                 noteText(mEnemyTarget ? "No enemy type can live where this player is."
@@ -1471,71 +1531,80 @@ void Interface::drawEnemyTypes(const MenuSnapshot& snapshot, const RuntimeCatalo
         chosen = firstListed;
         mSelectedEnemyType = firstListed->id.index;
     }
-    if (previews) {
-        drawPreview(PreviewKind::Enemy,
-                    chosen ? std::optional<std::size_t>{chosen->id.index} : std::nullopt);
-    }
-    ImGui::EndGroup();
     ImGui::SameLine(0.f, kColumnGap);
 
-    if (beginCard("##enemy_actions", ImVec2(0.f, 0.f))) {
+    if (beginCard("##enemy_actions", ImVec2(previews ? kControlsWidth : 0.f, 0.f))) {
         sectionTitle(Icon::Pin, "WHERE");
         drawPlayerPicker({.id = "##enemy_target",
-                          .habitatLabel = host ? "Random spot in its own area" : nullptr,
-                          .visibleRows = 4},
+                          .habitatLabel = "Random spot in its own area",
+                          .visibleRows = 6},
                          snapshot, mEnemyTarget);
-        if (chosen) {
-            sliderRow("Count", mEnemyCount, {.minimum = 1, .maximum = kMaximumSpawnCount}, "%d");
-            if (mEnemyTarget) {
-                sliderRow("Distance", mEnemyDistanceMeters,
-                          {.minimum = 0, .maximum = kMaximumSpawnDistanceMeters},
-                          mEnemyDistanceMeters == 0 ? "next to them" : "about %d m away");
-                noteHint(mHint, "How far from the player the enemies appear.");
-            }
-            const std::uint8_t count = static_cast<std::uint8_t>(mEnemyCount);
-            const std::uint8_t distance = static_cast<std::uint8_t>(mEnemyDistanceMeters);
-            if (spawnable(*chosen)) {
-                if (mEnemyTarget) {
-                    command("Spawn at player", "Creates new enemies of this type near the player.",
-                            {PlayerAction::SpawnEnemyAtPlayer,
-                             EnemyAtPlayerPayload{chosen->id, count, *mEnemyTarget, distance}});
-                } else {
-                    command("Spawn",
-                            "Creates new enemies of this type at random spots it can live in.",
-                            {PlayerAction::SpawnEnemy, EnemySpawnPayload{chosen->id, count}});
-                }
-            }
-            if (mEnemyTarget && summonable(*chosen)) {
-                command("Bring living ones here",
-                        "Moves up to Count living enemies of this type to the player.",
-                        {PlayerAction::SummonEnemyTypeAtPlayer,
-                         EnemyAtPlayerPayload{chosen->id, count, *mEnemyTarget, distance}});
-            }
+        sliderRow("Count", mEnemyCount, {.minimum = 1, .maximum = kMaximumSpawnCount}, "%d");
+        sliderRow("Distance", mEnemyDistanceMeters,
+                  {.minimum = 0, .maximum = kMaximumSpawnDistanceMeters},
+                  mEnemyDistanceMeters == 0 ? "next to them" : "about %d m away");
+        noteHint(mHint, "How far from the chosen player the enemies appear.");
+
+        const std::uint8_t count = static_cast<std::uint8_t>(mEnemyCount);
+        const std::uint8_t distance = static_cast<std::uint8_t>(mEnemyDistanceMeters);
+        const char* const spawnHint = "Creates new enemies of this type where you chose.";
+        const char* spawnBlocked = nullptr;
+        if (!host) {
+            spawnBlocked = "host only";
+        } else if (!chosen) {
+            spawnBlocked = "nothing can live there";
+        } else if (!livesThere(*chosen)) {
+            spawnBlocked = "cannot live there";
         }
-        if (session.world.has(WorldFeature::EnemiesAlive)) {
-            sectionTitle(Icon::Enemies, "EVERY LIVING ENEMY");
-            dangerCommand("Kill all enemies",
-                          host ? "Kills every enemy and removes the ones that cannot die."
-                               : "Kills every enemy that can die.",
-                          {PlayerAction::KillAllEnemies, NoPlayerActionPayload{}});
-            command("Stun all enemies for 60 s",
-                    "Freezes every enemy that can be stunned. Touching one can still hurt.",
-                    {PlayerAction::StunAllEnemies, NoPlayerActionPayload{}});
+        if (spawnBlocked || !chosen) {
+            blockedRow("Spawn", spawnHint, spawnBlocked);
+        } else if (mEnemyTarget) {
+            command("Spawn at player", spawnHint,
+                    {PlayerAction::SpawnEnemyAtPlayer,
+                     EnemyAtPlayerPayload{chosen->id, count, *mEnemyTarget, distance}});
+        } else {
+            command("Spawn", spawnHint,
+                    {PlayerAction::SpawnEnemy, EnemySpawnPayload{chosen->id, count}});
         }
+        const char* const bringHint =
+            "Moves up to Count living enemies of this type to the player.";
+        if (mEnemyTarget && chosen && summonable(*chosen)) {
+            command("Bring living ones here", bringHint,
+                    {PlayerAction::SummonEnemyTypeAtPlayer,
+                     EnemyAtPlayerPayload{chosen->id, count, *mEnemyTarget, distance}});
+        } else {
+            blockedRow("Bring living ones here", bringHint,
+                       mEnemyTarget ? "none alive there" : "pick a player first");
+        }
+
+        sectionTitle(Icon::Enemies, "EVERY LIVING ENEMY");
+        const char* const noEnemies =
+            session.world.has(WorldFeature::EnemiesAlive) ? nullptr : "no enemies alive";
+        dangerCommand("Kill all enemies",
+                      host ? "Kills every enemy and removes the ones that cannot die."
+                           : "Kills every enemy that can die.",
+                      {PlayerAction::KillAllEnemies, NoPlayerActionPayload{}}, noEnemies);
+        command("Stun all enemies for 60 s",
+                "Freezes every enemy that can be stunned. Touching one can still hurt.",
+                {PlayerAction::StunAllEnemies, NoPlayerActionPayload{}}, noEnemies);
     }
     ImGui::EndChild();
+    if (previews) {
+        ImGui::SameLine(0.f, kColumnGap);
+        drawModelPanel(snapshot, PreviewKind::Enemy,
+                       chosen ? std::optional<std::size_t>{chosen->id.index} : std::nullopt,
+                       chosen ? chosen->name : std::string_view{});
+    }
 }
 
 void Interface::drawTrapTypes(const MenuSnapshot& snapshot, const RuntimeCatalogs& catalogs) {
-    const bool moonLoaded = snapshot.session.world.has(WorldFeature::MoonLoaded);
+    const SessionState& session = snapshot.session;
+    const bool previews = session.world.has(WorldFeature::ModelPreviews);
     const std::size_t trapCount = catalogs.hazardCount();
     if (mSelectedTrapType >= trapCount) {
         mSelectedTrapType = trapCount == 0 ? 0 : trapCount - 1;
     }
-    const bool previews = snapshot.session.world.has(WorldFeature::ModelPreviews);
-    ImGui::BeginGroup();
-    if (beginCard("##trap_types",
-                  ImVec2(kListWidth, previews ? -(kPreviewHeight + kColumnGap) : 0.f))) {
+    if (beginCard("##trap_types", ImVec2(kListWidth, 0.f))) {
         const float half = (ImGui::GetContentRegionAvail().x - 4.f) * 0.5f;
         if (segmentButton("Enemies", false, half)) {
             mSpawnKind = SpawnKind::Enemies;
@@ -1562,67 +1631,59 @@ void Interface::drawTrapTypes(const MenuSnapshot& snapshot, const RuntimeCatalog
         }
     }
     ImGui::EndChild();
-    if (previews) {
-        drawPreview(PreviewKind::Trap,
-                    trapCount == 0 ? std::nullopt : std::optional<std::size_t>{mSelectedTrapType});
-    }
-    ImGui::EndGroup();
     ImGui::SameLine(0.f, kColumnGap);
 
-    if (beginCard("##trap_actions", ImVec2(0.f, 0.f))) {
+    const HazardCatalogLookup chosen = catalogs.hazardAt(mSelectedTrapType);
+    const bool found = chosen.result == CatalogLookupResult::Found;
+    if (beginCard("##trap_actions", ImVec2(previews ? kControlsWidth : 0.f, 0.f))) {
         sectionTitle(Icon::Pin, "NEAR");
-        const HazardCatalogLookup chosen = catalogs.hazardAt(mSelectedTrapType);
-        if (!moonLoaded) {
-            noteText("Land on a moon first. Traps need a loaded map.");
+        drawPlayerPicker({.id = "##trap_target", .habitatLabel = nullptr, .visibleRows = 5},
+                         snapshot, mTrapTarget);
+        sliderRow("Count", mTrapCount, {.minimum = 1, .maximum = kMaximumSpawnCount}, "%d");
+        sliderRow("Distance", mTrapDistanceMeters,
+                  {.minimum = 0, .maximum = kMaximumSpawnDistanceMeters},
+                  mTrapDistanceMeters == 0 ? "at their feet" : "about %d m away");
+        noteHint(mHint, "How far from the player the traps are placed.");
+        const char* const placeHint =
+            "Creates working traps of this type on the floor near the player.";
+        const char* blocked = nullptr;
+        if (!session.world.has(WorldFeature::Host)) {
+            blocked = "host only";
+        } else if (!session.world.has(WorldFeature::MoonLoaded)) {
+            blocked = "land on a moon first";
+        } else if (!mTrapTarget) {
+            blocked = "no player alive";
+        } else if (!found) {
+            blocked = "nothing selected";
+        }
+        if (blocked || !mTrapTarget || !found) {
+            blockedRow("Place near player", placeHint, blocked);
         } else {
-            drawPlayerPicker({.id = "##trap_target", .habitatLabel = nullptr, .visibleRows = 4},
-                             snapshot, mTrapTarget);
-            if (mTrapTarget && chosen.result == CatalogLookupResult::Found) {
-                sliderRow("Count", mTrapCount, {.minimum = 1, .maximum = kMaximumSpawnCount}, "%d");
-                sliderRow("Distance", mTrapDistanceMeters,
-                          {.minimum = 0, .maximum = kMaximumSpawnDistanceMeters},
-                          mTrapDistanceMeters == 0 ? "at their feet" : "about %d m away");
-                noteHint(mHint, "How far from the player the traps are placed.");
-                command("Place near player",
-                        "Creates working traps of this type on the floor near the player.",
-                        {PlayerAction::SpawnHazardAtPlayer,
-                         HazardAtPlayerPayload{chosen.entry.id,
-                                               static_cast<std::uint8_t>(mTrapCount), *mTrapTarget,
-                                               static_cast<std::uint8_t>(mTrapDistanceMeters)}});
-            } else if (!mTrapTarget) {
-                noteText("No living player to place traps near.");
-            }
+            command("Place near player", placeHint,
+                    {PlayerAction::SpawnHazardAtPlayer,
+                     HazardAtPlayerPayload{chosen.entry.id, static_cast<std::uint8_t>(mTrapCount),
+                                           *mTrapTarget,
+                                           static_cast<std::uint8_t>(mTrapDistanceMeters)}});
         }
     }
     ImGui::EndChild();
+    if (previews) {
+        ImGui::SameLine(0.f, kColumnGap);
+        drawModelPanel(snapshot, PreviewKind::Trap,
+                       found ? std::optional<std::size_t>{mSelectedTrapType} : std::nullopt,
+                       found ? chosen.entry.name : std::string_view{});
+    }
 }
 
 void Interface::drawItemsPage(const MenuSnapshot& snapshot, const RuntimeCatalogs& catalogs) {
     const SessionState& session = snapshot.session;
     const bool host = session.world.has(WorldFeature::Host);
-    const bool desk = session.world.has(WorldFeature::CompanyDesk);
-    if (!host) {
-        if (beginCard("##items_client", ImVec2(0.f, 0.f))) {
-            if (desk) {
-                sectionTitle(Icon::Coin, "COMPANY");
-                command("Put all ship scrap on the counter",
-                        "Places every piece of scrap in the ship on the sell counter.",
-                        {PlayerAction::DepositShipScrap, NoPlayerActionPayload{}});
-            }
-            noteText("Only the host can create items, move items, or change credits.");
-        }
-        ImGui::EndChild();
-        return;
-    }
-
+    const bool previews = session.world.has(WorldFeature::ModelPreviews);
     const std::size_t itemCount = catalogs.itemCount();
     if (mSelectedItemType >= itemCount) {
         mSelectedItemType = itemCount == 0 ? 0 : itemCount - 1;
     }
-    const bool previews = session.world.has(WorldFeature::ModelPreviews);
-    ImGui::BeginGroup();
-    if (beginCard("##item_types",
-                  ImVec2(kListWidth, previews ? -(kPreviewHeight + kColumnGap) : 0.f))) {
+    if (beginCard("##item_types", ImVec2(kListWidth, 0.f))) {
         sectionTitle(Icon::List, "ITEM TYPES");
         if (itemCount == 0) {
             noteText("Item types appear once you are in a lobby.");
@@ -1643,62 +1704,75 @@ void Interface::drawItemsPage(const MenuSnapshot& snapshot, const RuntimeCatalog
         }
     }
     ImGui::EndChild();
-    if (previews) {
-        drawPreview(PreviewKind::Item,
-                    itemCount == 0 ? std::nullopt : std::optional<std::size_t>{mSelectedItemType});
-    }
-    ImGui::EndGroup();
     ImGui::SameLine(0.f, kColumnGap);
 
-    if (beginCard("##item_actions", ImVec2(0.f, 0.f))) {
+    const ItemCatalogLookup chosen = catalogs.itemAt(mSelectedItemType);
+    const bool found = chosen.result == CatalogLookupResult::Found;
+    if (beginCard("##item_actions", ImVec2(previews ? kControlsWidth : 0.f, 0.f))) {
         sectionTitle(Icon::Self, "GIVE TO");
-        drawPlayerPicker({.id = "##item_target", .habitatLabel = nullptr, .visibleRows = 3},
+        drawPlayerPicker({.id = "##item_target", .habitatLabel = nullptr, .visibleRows = 4},
                          snapshot, mItemTarget);
-        const ItemCatalogLookup chosen = catalogs.itemAt(mSelectedItemType);
-        if (mItemTarget) {
-            sliderRow("Count", mItemCount, {.minimum = 1, .maximum = kMaximumSpawnCount}, "%d");
-            if (switchRow("Set scrap value", mItemValueFixed)) {
-                mItemValueFixed = !mItemValueFixed;
-            }
-            noteHint(mHint, "Off rolls each scrap item's normal random value.");
-            if (mItemValueFixed) {
-                sliderRow("Value", mItemValue, {.minimum = 0, .maximum = kMaximumFixedScrapValue},
-                          "$%d", ImGuiSliderFlags_Logarithmic);
-                noteHint(mHint, "Every spawned scrap item sells for exactly this much.");
-            }
-            if (chosen.result == CatalogLookupResult::Found) {
-                const std::optional<int> value =
-                    mItemValueFixed ? std::optional<int>{mItemValue} : std::nullopt;
-                command("Spawn at player", "Drops new items on the floor in front of the player.",
-                        {PlayerAction::SpawnItemAtPlayer,
-                         ItemAtPlayerPayload{chosen.entry.id, static_cast<std::uint8_t>(mItemCount),
-                                             *mItemTarget, value}});
-            }
-            command("Bring every loose item here",
-                    "Moves every item that nobody is holding to the player's feet.",
-                    {PlayerAction::TeleportItemsToPlayer, PlayerTargetPayload{*mItemTarget}});
+        sliderRow("Count", mItemCount, {.minimum = 1, .maximum = kMaximumSpawnCount}, "%d");
+        if (switchRow("Set scrap value", mItemValueFixed)) {
+            mItemValueFixed = !mItemValueFixed;
+        }
+        noteHint(mHint, "Off rolls each scrap item's normal random value.");
+        if (mItemValueFixed) {
+            sliderRow("Value", mItemValue, {.minimum = 0, .maximum = kMaximumFixedScrapValue},
+                      "$%d", ImGuiSliderFlags_Logarithmic);
+            noteHint(mHint, "Every spawned scrap item sells for exactly this much.");
+        }
+        const char* const hostOnly = host ? nullptr : "host only";
+        const char* const noPlayer = mItemTarget ? nullptr : "no player alive";
+        const char* const spawnHint = "Drops new items on the floor in front of the player.";
+        const char* const spawnBlocked =
+            hostOnly ? hostOnly : (noPlayer ? noPlayer : (found ? nullptr : "nothing selected"));
+        if (spawnBlocked || !mItemTarget || !found) {
+            blockedRow("Spawn at player", spawnHint, spawnBlocked);
         } else {
-            noteText("No player to give items to yet.");
+            const std::optional<int> value =
+                mItemValueFixed ? std::optional<int>{mItemValue} : std::nullopt;
+            command("Spawn at player", spawnHint,
+                    {PlayerAction::SpawnItemAtPlayer,
+                     ItemAtPlayerPayload{chosen.entry.id, static_cast<std::uint8_t>(mItemCount),
+                                         *mItemTarget, value}});
         }
-        if (desk) {
-            sectionTitle(Icon::Coin, "COMPANY");
-            command("Put all ship scrap on the counter",
-                    "Places every piece of scrap in the ship on the sell counter.",
-                    {PlayerAction::DepositShipScrap, NoPlayerActionPayload{}});
+        const char* const bringHint =
+            "Moves every item that nobody is holding to the player's feet.";
+        if (hostOnly || !mItemTarget) {
+            blockedRow("Bring every loose item here", bringHint, hostOnly ? hostOnly : noPlayer);
+        } else {
+            command("Bring every loose item here", bringHint,
+                    {PlayerAction::TeleportItemsToPlayer, PlayerTargetPayload{*mItemTarget}});
         }
-        if (session.world.has(WorldFeature::Terminal)) {
-            sectionTitle(Icon::Coin, "CREDITS");
-            sliderRow("Amount", mCreditAmount,
-                      {.minimum = 1, .maximum = kMaximumTerminalCreditsPerAction}, "%d",
-                      ImGuiSliderFlags_Logarithmic);
-            command("Add credits", "Adds this many credits to the crew's terminal balance.",
-                    {PlayerAction::AddTerminalCredits, TerminalCreditsPayload{mCreditAmount}});
-        }
+
+        sectionTitle(Icon::Building, "COMPANY");
+        command("Ship scrap to the counter",
+                "Places every piece of scrap in the ship on the company's sell counter.",
+                {PlayerAction::DepositShipScrap, NoPlayerActionPayload{}},
+                session.world.has(WorldFeature::CompanyDesk) ? nullptr : "company only");
+
+        sectionTitle(Icon::Coin, "CREDITS");
+        sliderRow("Amount", mCreditAmount,
+                  {.minimum = 1, .maximum = kMaximumTerminalCreditsPerAction}, "%d",
+                  ImGuiSliderFlags_Logarithmic);
+        command("Add credits", "Adds this many credits to the crew's terminal balance.",
+                {PlayerAction::AddTerminalCredits, TerminalCreditsPayload{mCreditAmount}},
+                hostOnly
+                    ? hostOnly
+                    : (session.world.has(WorldFeature::Terminal) ? nullptr : "not in a lobby"));
     }
     ImGui::EndChild();
+    if (previews) {
+        ImGui::SameLine(0.f, kColumnGap);
+        drawModelPanel(snapshot, PreviewKind::Item,
+                       found ? std::optional<std::size_t>{mSelectedItemType} : std::nullopt,
+                       found ? chosen.entry.name : std::string_view{});
+    }
 }
 
 void Interface::drawMoonsPage(const MenuSnapshot& snapshot, const RuntimeCatalogs& catalogs) {
+    const bool previews = snapshot.session.world.has(WorldFeature::ModelPreviews);
     const std::size_t moonCount = catalogs.moonCount();
     if (mSelectedMoon >= moonCount) {
         mSelectedMoon = moonCount == 0 ? 0 : moonCount - 1;
@@ -1726,16 +1800,17 @@ void Interface::drawMoonsPage(const MenuSnapshot& snapshot, const RuntimeCatalog
     ImGui::EndChild();
     ImGui::SameLine(0.f, kColumnGap);
 
-    if (beginCard("##moon_actions", ImVec2(0.f, 0.f))) {
+    const MoonCatalogLookup chosen = catalogs.moonAt(mSelectedMoon);
+    const bool found = chosen.result == CatalogLookupResult::Found;
+    if (beginCard("##moon_actions", ImVec2(previews ? kControlsWidth : 0.f, 0.f))) {
         sectionTitle(Icon::Route, "ROUTE");
-        const MoonCatalogLookup chosen = catalogs.moonAt(mSelectedMoon);
-        if (chosen.result != CatalogLookupResult::Found) {
-            noteText("Pick a moon.");
-        } else if (!snapshot.session.world.has(WorldFeature::ShipInOrbit)) {
-            noteText("The ship must be in orbit and not already travelling to change course.");
+        const char* const routeHint = "Sets course for the selected moon at no cost.";
+        if (!found) {
+            blockedRow("Route the ship here", routeHint, "nothing selected");
         } else {
-            command("Route the ship here", "Sets course for the selected moon at no cost.",
-                    {PlayerAction::TravelToMoon, MoonTravelPayload{chosen.entry.id}});
+            command("Route the ship here", routeHint,
+                    {PlayerAction::TravelToMoon, MoonTravelPayload{chosen.entry.id}},
+                    snapshot.session.world.has(WorldFeature::ShipInOrbit) ? nullptr : "orbit only");
         }
         sectionTitle(Icon::Info, "NOTES");
         noteText("Every moon the game knows is listed, including ones the terminal hides.");
@@ -1744,164 +1819,136 @@ void Interface::drawMoonsPage(const MenuSnapshot& snapshot, const RuntimeCatalog
         noteText("(unlisted) moons only work while you host with nobody else connected.");
     }
     ImGui::EndChild();
+    if (previews) {
+        ImGui::SameLine(0.f, kColumnGap);
+        drawModelPanel(snapshot, PreviewKind::Moon,
+                       found ? std::optional<std::size_t>{mSelectedMoon} : std::nullopt,
+                       found ? chosen.entry.name : std::string_view{});
+    }
 }
 
-void Interface::drawWorldPage(const MenuSnapshot& snapshot) {
+void Interface::drawTrollsPage(const MenuSnapshot& snapshot) {
     const SessionState& session = snapshot.session;
     const auto has = [&](WorldFeature feature) { return session.world.has(feature); };
     const auto on = [&](SessionSwitch state) { return session.switches.has(state); };
-    const NoPlayerActionPayload none{};
-    const bool host = has(WorldFeature::Host);
-    const bool orbit = has(WorldFeature::ShipInOrbit);
+    const auto needs = [&](WorldFeature feature, const char* reason) {
+        return has(feature) ? nullptr : reason;
+    };
+    const auto whileOff = [&](SessionSwitch state, const char* reason) {
+        return on(state) ? nullptr : reason;
+    };
+    const auto toggle = [&](PlayerAction action) {
+        return PlayerActionRequest{action, NoPlayerActionPayload{}};
+    };
+    const char* const hostOnly = has(WorldFeature::Host) ? nullptr : "host only";
+    const char* const orbitOnly = has(WorldFeature::ShipInOrbit) ? nullptr : "orbit only";
+    const char* const lobby = "not in a lobby";
 
-    const bool shipSection = has(WorldFeature::ShipHorn) || has(WorldFeature::ShipLights) ||
-                             has(WorldFeature::Terminal) || has(WorldFeature::Plushie) ||
-                             (has(WorldFeature::ShipDoor) && orbit) || (host && orbit);
-    const bool gearSection = has(WorldFeature::Shotguns) || has(WorldFeature::Jetpacks) ||
-                             has(WorldFeature::HauntedMasks) || on(SessionSwitch::JetpackTrap);
-    const bool facilitySection =
-        has(WorldFeature::Landmines) || has(WorldFeature::Turrets) ||
-        (host && (has(WorldFeature::FacilityPower) || has(WorldFeature::MainBridge) ||
-                  has(WorldFeature::HoardingBugNest))) ||
-        has(WorldFeature::SmallBridge) || has(WorldFeature::MineshaftElevator);
-    const bool leftColumn = shipSection || gearSection || has(WorldFeature::Cruiser);
-    const bool rightColumn = facilitySection || has(WorldFeature::CompanyDesk);
-    if (!leftColumn && !rightColumn) {
-        noteText("Nothing to control yet. Join or host a game first.");
-        return;
-    }
+    if (beginCard("##trolls_ship", ImVec2(columnWidth(), 0.f))) {
+        sectionTitle(Icon::Ship, "SHIP");
+        sessionSwitch("Ship horn", "Holds the ship's loud horn down.", on(SessionSwitch::ShipHorn),
+                      toggle(PlayerAction::ToggleShipHorn),
+                      whileOff(SessionSwitch::ShipHorn,
+                               needs(WorldFeature::ShipHorn, "no horn on this ship")));
+        sessionSwitch("Ship lights", "Switches the ship's ceiling lights for everyone.",
+                      on(SessionSwitch::ShipLights), toggle(PlayerAction::ToggleShipLights),
+                      needs(WorldFeature::ShipLights, lobby));
+        sessionSwitch("Terminal noise spam", "Plays the terminal's error beep ten times a second.",
+                      on(SessionSwitch::TerminalSound), toggle(PlayerAction::ToggleTerminalSound),
+                      whileOff(SessionSwitch::TerminalSound, needs(WorldFeature::Terminal, lobby)));
+        const char* const doorBlocked = needs(WorldFeature::ShipDoor, lobby);
+        sessionSwitch(
+            "Door buttons in orbit",
+            "Lets you open the hangar door in space. Only you see it move.",
+            on(SessionSwitch::ShipDoorButtons), toggle(PlayerAction::OpenShipDoorSpace),
+            whileOff(SessionSwitch::ShipDoorButtons, doorBlocked ? doorBlocked : orbitOnly));
+        sessionSwitch("Plushie squeak spam",
+                      "Squeezes the pajama man plushie in the ship over and over.",
+                      on(SessionSwitch::PlushieSpam),
+                      {PlayerAction::TogglePjManSpam,
+                       PlushieIntervalPayload{std::chrono::milliseconds{
+                           static_cast<int>(mPlushieIntervalSeconds * 1000.f)}}},
+                      whileOff(SessionSwitch::PlushieSpam,
+                               needs(WorldFeature::Plushie, "no plushie on this ship")));
+        if (!on(SessionSwitch::PlushieSpam)) {
+            sliderRow("Squeak every", mPlushieIntervalSeconds, {.minimum = 0.f, .maximum = 1.f},
+                      "%.2f s");
+        }
+        dangerCommand("Fire the whole crew",
+                      "Ejects everyone into space and resets the save, like missing quota.",
+                      toggle(PlayerAction::EjectEveryone), hostOnly ? hostOnly : orbitOnly);
 
-    if (beginCard("##world_ship", ImVec2(columnWidth(), 0.f))) {
-        if (shipSection) {
-            sectionTitle(Icon::Ship, "SHIP");
-        }
-        if (has(WorldFeature::ShipHorn)) {
-            sessionSwitch("Horn", "Holds the ship's loud horn down.", on(SessionSwitch::ShipHorn),
-                          PlayerAction::ToggleShipHorn);
-        }
-        if (has(WorldFeature::ShipLights)) {
-            sessionSwitch("Lights", "Switches the ship's ceiling lights for everyone.",
-                          on(SessionSwitch::ShipLights), PlayerAction::ToggleShipLights);
-        }
-        if (has(WorldFeature::Terminal)) {
-            sessionSwitch("Terminal noise spam",
-                          "Plays the terminal's error beep ten times a second.",
-                          on(SessionSwitch::TerminalSound), PlayerAction::ToggleTerminalSound);
-        }
-        if (has(WorldFeature::ShipDoor) && orbit) {
-            sessionSwitch("Door buttons in orbit",
-                          "Lets you open the hangar door in space. Only you see it move.",
-                          on(SessionSwitch::ShipDoorButtons), PlayerAction::OpenShipDoorSpace);
-        }
-        if (has(WorldFeature::Plushie)) {
-            if (switchRow("Plushie squeak spam", on(SessionSwitch::PlushieSpam))) {
-                queueAction({PlayerAction::TogglePjManSpam,
-                             PlushieIntervalPayload{std::chrono::milliseconds{
-                                 static_cast<int>(mPlushieIntervalSeconds * 1000.f)}}});
-            }
-            noteHint(mHint, "Squeezes the pajama man plushie in the ship over and over.");
-            if (!on(SessionSwitch::PlushieSpam)) {
-                sliderRow("Squeak every", mPlushieIntervalSeconds, {.minimum = 0.f, .maximum = 1.f},
-                          "%.2f s");
-            }
-        }
-        if (host && orbit) {
-            dangerCommand("Fire the whole crew",
-                          "Ejects everyone into space and resets the save, like missing quota.",
-                          {PlayerAction::EjectEveryone, none});
-        }
-        if (has(WorldFeature::Cruiser)) {
-            sectionTitle(Icon::Car, "CRUISER");
-            sessionSwitch("Horn", "Holds the cruiser's horn down.", on(SessionSwitch::CruiserHorn),
-                          PlayerAction::ToggleCarHorn);
-            sessionSwitch("Ship magnet", "Switches the magnet that holds the cruiser to the ship.",
-                          on(SessionSwitch::CruiserMagnet), PlayerAction::ToggleVehicleMagnet);
-            command("Blow up the cruiser", "Destroys the cruiser in an explosion.",
-                    {PlayerAction::ExplodeCruiser, none});
-        }
-        if (gearSection) {
-            sectionTitle(Icon::Cog, "GEAR");
-        }
-        if (has(WorldFeature::Shotguns)) {
-            command("Fire every shotgun", "Fires every shotgun on the map once.",
-                    {PlayerAction::ShootAllShotguns, none});
-            sessionSwitch("Shotgun spam", "Fires every shotgun ten times a second.",
-                          on(SessionSwitch::ShotgunSpam), PlayerAction::ToggleShotgunSpam);
-        }
-        if (has(WorldFeature::Jetpacks)) {
-            command("Explode every jetpack", "Blows up every jetpack on the map.",
-                    {PlayerAction::ExplodeAllJetpacks, none});
-        }
-        if (has(WorldFeature::Jetpacks) || on(SessionSwitch::JetpackTrap)) {
-            sessionSwitch("Explode jetpacks when held",
-                          "Blows up any jetpack the moment someone is holding it.",
-                          on(SessionSwitch::JetpackTrap),
-                          PlayerAction::ToggleExplodeJetpacksOnGrab);
-        }
-        if (has(WorldFeature::HauntedMasks)) {
-            command("Turn masks into Masked",
-                    "Spawns a Masked enemy from every mask that can become one.",
-                    {PlayerAction::SpawnMaskedEnemy, none});
-        }
-        if (!leftColumn) {
-            noteText("The ship, cruiser and gear controls appear here when they exist.");
-        }
+        sectionTitle(Icon::Car, "CRUISER");
+        const char* const noCruiser = needs(WorldFeature::Cruiser, "no cruiser");
+        sessionSwitch("Cruiser horn", "Holds the cruiser's horn down.",
+                      on(SessionSwitch::CruiserHorn), toggle(PlayerAction::ToggleCarHorn),
+                      whileOff(SessionSwitch::CruiserHorn, noCruiser));
+        sessionSwitch("Ship magnet", "Switches the magnet that holds the cruiser to the ship.",
+                      on(SessionSwitch::CruiserMagnet), toggle(PlayerAction::ToggleVehicleMagnet),
+                      noCruiser);
+        command("Blow up the cruiser", "Destroys the cruiser in an explosion.",
+                toggle(PlayerAction::ExplodeCruiser), noCruiser);
+
+        sectionTitle(Icon::Coin, "COMPANY");
+        const char* const noDesk = needs(WorldFeature::CompanyDesk, "company only");
+        command("Tentacle attack", "Makes the company monster grab whoever stands at the counter.",
+                toggle(PlayerAction::ForceTentacleAttack), noDesk);
+        sessionSwitch("Counter door spam", "Slams the sell counter's door open ten times a second.",
+                      on(SessionSwitch::DeskDoorSound),
+                      toggle(PlayerAction::ToggleDepositDeskSound),
+                      whileOff(SessionSwitch::DeskDoorSound, noDesk ? noDesk : hostOnly));
     }
     ImGui::EndChild();
     ImGui::SameLine(0.f, kColumnGap);
-    if (beginCard("##world_map", ImVec2(0.f, 0.f))) {
-        if (facilitySection) {
-            sectionTitle(Icon::Building, "FACILITY");
-        }
-        if (has(WorldFeature::Landmines)) {
-            sessionSwitch("Landmines armed", "Arms or disarms every landmine.",
-                          on(SessionSwitch::LandminesArmed), PlayerAction::ToggleAllMines);
-            command("Detonate landmines", "Explodes every landmine right now.",
-                    {PlayerAction::BlowUpAllMines, none});
-        }
-        if (has(WorldFeature::Turrets)) {
-            sessionSwitch("Turrets active", "Switches every turret on or off.",
-                          on(SessionSwitch::TurretsActive), PlayerAction::ToggleAllTurrets);
-            command("Send turrets berserk",
-                    "Makes every turret spin and fire wildly for a few seconds.",
-                    {PlayerAction::BerserkAllTurrets, none});
-        }
-        if (host && has(WorldFeature::FacilityPower)) {
-            sessionSwitch("Power", "Switches the facility's lights and powered doors.",
-                          on(SessionSwitch::FacilityPower), PlayerAction::ToggleFactoryLights);
-        }
-        if (host && has(WorldFeature::MainBridge)) {
-            command("Collapse the main bridge", "Drops the large outdoor bridge.",
-                    {PlayerAction::ForceBridgeFall, none});
-        }
-        if (has(WorldFeature::SmallBridge)) {
-            command("Collapse the small bridge", "Drops the small wooden bridge.",
-                    {PlayerAction::ForceSmallBridgeFall, none});
-        }
-        if (has(WorldFeature::MineshaftElevator)) {
-            command("Press the elevator button", "Sends the mineshaft elevator to the other floor.",
-                    {PlayerAction::ToggleMineshaftElevator, none});
-        }
-        if (host && has(WorldFeature::HoardingBugNest)) {
-            command("Hoarding bug infestation",
-                    "Turns the facility's spawns into a hoarding bug swarm.",
-                    {PlayerAction::SpawnHoardingBugInfestation, none});
-        }
-        if (has(WorldFeature::CompanyDesk)) {
-            sectionTitle(Icon::Coin, "COMPANY");
-            command("Tentacle attack",
-                    "Makes the company monster grab whoever stands at the counter.",
-                    {PlayerAction::ForceTentacleAttack, none});
-            if (host) {
-                sessionSwitch(
-                    "Counter door spam", "Slams the sell counter's door open ten times a second.",
-                    on(SessionSwitch::DeskDoorSound), PlayerAction::ToggleDepositDeskSound);
-            }
-        }
-        if (!rightColumn) {
-            noteText("Landmines, turrets, bridges, the elevator and the company counter appear "
-                     "here on moons that have them.");
-        }
+    if (beginCard("##trolls_map", ImVec2(0.f, 0.f))) {
+        sectionTitle(Icon::Building, "FACILITY");
+        const char* const noMines = needs(WorldFeature::Landmines, "no landmines here");
+        sessionSwitch("Landmines armed", "Arms or disarms every landmine.",
+                      on(SessionSwitch::LandminesArmed), toggle(PlayerAction::ToggleAllMines),
+                      noMines);
+        command("Detonate landmines", "Explodes every landmine right now.",
+                toggle(PlayerAction::BlowUpAllMines), noMines);
+        const char* const noTurrets = needs(WorldFeature::Turrets, "no turrets here");
+        sessionSwitch("Turrets active", "Switches every turret on or off.",
+                      on(SessionSwitch::TurretsActive), toggle(PlayerAction::ToggleAllTurrets),
+                      noTurrets);
+        command("Send turrets berserk",
+                "Makes every turret spin and fire wildly for a few seconds.",
+                toggle(PlayerAction::BerserkAllTurrets), noTurrets);
+        sessionSwitch("Facility power", "Switches the facility's lights and powered doors.",
+                      on(SessionSwitch::FacilityPower), toggle(PlayerAction::ToggleFactoryLights),
+                      hostOnly ? hostOnly : needs(WorldFeature::FacilityPower, "no facility here"));
+        command("Collapse the main bridge", "Drops the large outdoor bridge.",
+                toggle(PlayerAction::ForceBridgeFall),
+                hostOnly ? hostOnly : needs(WorldFeature::MainBridge, "no bridge here"));
+        command("Collapse the small bridge", "Drops the small wooden bridge.",
+                toggle(PlayerAction::ForceSmallBridgeFall),
+                needs(WorldFeature::SmallBridge, "no bridge here"));
+        command("Press the elevator button", "Sends the mineshaft elevator to the other floor.",
+                toggle(PlayerAction::ToggleMineshaftElevator),
+                needs(WorldFeature::MineshaftElevator, "no elevator here"));
+        command(
+            "Hoarding bug infestation", "Turns the facility's spawns into a hoarding bug swarm.",
+            toggle(PlayerAction::SpawnHoardingBugInfestation),
+            hostOnly ? hostOnly : needs(WorldFeature::HoardingBugNest, "no hoarding bugs here"));
+
+        sectionTitle(Icon::Cog, "GEAR");
+        const char* const noShotguns = needs(WorldFeature::Shotguns, "no shotguns here");
+        command("Fire every shotgun", "Fires every shotgun on the map once.",
+                toggle(PlayerAction::ShootAllShotguns), noShotguns);
+        sessionSwitch("Shotgun spam", "Fires every shotgun ten times a second.",
+                      on(SessionSwitch::ShotgunSpam), toggle(PlayerAction::ToggleShotgunSpam),
+                      whileOff(SessionSwitch::ShotgunSpam, noShotguns));
+        command("Explode every jetpack", "Blows up every jetpack on the map.",
+                toggle(PlayerAction::ExplodeAllJetpacks),
+                needs(WorldFeature::Jetpacks, "no jetpacks here"));
+        sessionSwitch(
+            "Explode jetpacks when held", "Blows up any jetpack the moment someone is holding it.",
+            on(SessionSwitch::JetpackTrap), toggle(PlayerAction::ToggleExplodeJetpacksOnGrab));
+        command("Turn masks into Masked",
+                "Spawns a Masked enemy from every mask that can become one.",
+                toggle(PlayerAction::SpawnMaskedEnemy),
+                needs(WorldFeature::HauntedMasks, "no usable masks here"));
     }
     ImGui::EndChild();
 }

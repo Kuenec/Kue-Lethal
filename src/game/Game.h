@@ -59,6 +59,7 @@ enum class WorldFeature : std::uint8_t {
     HoardingBugNest,
     ShipDoor,
     ModelPreviews,
+    ModelMissing,
     Count,
 };
 

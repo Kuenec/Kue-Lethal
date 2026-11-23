@@ -67,8 +67,8 @@ struct MenuFrameEffects {
 
 class InternalHudRenderer final {
   public:
-    static constexpr int kMaximumRasterWidth = 726;
-    static constexpr int kMaximumRasterHeight = 446;
+    static constexpr int kMaximumRasterWidth = 906;
+    static constexpr int kMaximumRasterHeight = 526;
     static constexpr std::size_t kMaximumRasterBytes =
         static_cast<std::size_t>(kMaximumRasterWidth) *
         static_cast<std::size_t>(kMaximumRasterHeight) * std::size_t{4};

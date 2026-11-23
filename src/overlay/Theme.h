@@ -18,6 +18,7 @@ inline constexpr ImVec4 kSwitchOff{0.165f, 0.165f, 0.185f, 1.00f};
 inline constexpr ImVec4 kText{0.910f, 0.910f, 0.925f, 1.00f};
 inline constexpr ImVec4 kMuted{0.540f, 0.540f, 0.575f, 1.00f};
 inline constexpr ImVec4 kFaint{0.340f, 0.340f, 0.370f, 1.00f};
+inline constexpr ImVec4 kDisabled{0.430f, 0.430f, 0.465f, 1.00f};
 inline constexpr ImVec4 kAccent{0.940f, 0.940f, 0.955f, 1.00f};
 inline constexpr ImVec4 kOnAccent{0.020f, 0.020f, 0.024f, 1.00f};
 inline constexpr ImVec4 kDanger{0.880f, 0.270f, 0.310f, 1.00f};

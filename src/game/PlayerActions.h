@@ -17,7 +17,7 @@ enum class PlayerAction : std::uint8_t {
     None = 0,
     TeleportTo,
     Kill,
-    HealSelf,
+    Heal,
     KillAll,
     KillAllExceptLocal,
     LureAllEnemies,
@@ -168,6 +168,7 @@ constexpr PlayerActionPayloadKind playerActionPayloadKind(PlayerAction action) n
         return PlayerActionPayloadKind::Invalid;
     case PlayerAction::TeleportTo:
     case PlayerAction::Kill:
+    case PlayerAction::Heal:
     case PlayerAction::LureAllEnemies:
     case PlayerAction::TeleportAllEnemies:
     case PlayerAction::TogglePersistentLure:
@@ -190,7 +191,6 @@ constexpr PlayerActionPayloadKind playerActionPayloadKind(PlayerAction action) n
         return PlayerActionPayloadKind::MoonTravel;
     case PlayerAction::SpawnHazardAtPlayer:
         return PlayerActionPayloadKind::HazardAtPlayer;
-    case PlayerAction::HealSelf:
     case PlayerAction::KillAll:
     case PlayerAction::KillAllExceptLocal:
     case PlayerAction::KillAllEnemies:
