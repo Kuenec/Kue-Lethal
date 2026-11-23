@@ -202,14 +202,14 @@ struct ScreenPoint {
     float y;
 };
 
-constexpr ScreenPoint kStaminaSwitch{996.f, 401.f};
-constexpr ScreenPoint kPlayersPage{667.f, 453.f};
-constexpr ScreenPoint kItemsPage{667.f, 513.f};
-constexpr ScreenPoint kSettingsPage{667.f, 603.f};
-constexpr ScreenPoint kMoonsPage{667.f, 543.f};
-constexpr ScreenPoint kTeleportToSelf{1050.f, 455.f};
-constexpr ScreenPoint kKillPlayer{1050.f, 481.f};
-constexpr ScreenPoint kSaveSettings{884.f, 523.f};
+constexpr ScreenPoint kStaminaSwitch{807.f, 359.f};
+constexpr ScreenPoint kPlayersPage{577.f, 413.f};
+constexpr ScreenPoint kItemsPage{577.f, 473.f};
+constexpr ScreenPoint kSettingsPage{577.f, 563.f};
+constexpr ScreenPoint kMoonsPage{577.f, 503.f};
+constexpr ScreenPoint kTeleportToSelf{1007.f, 413.f};
+constexpr ScreenPoint kKillPlayer{1007.f, 439.f};
+constexpr ScreenPoint kSaveSettings{787.f, 481.f};
 
 struct PointerInput {
     float x = -1000.f;
@@ -379,16 +379,16 @@ void testExactPixelsAndConsumerRecovery(TestRun& run) {
     const RenderResult first = harness.render();
     run.expect(first.status == kue::internalhud::MenuRasterStatus::Success,
                "the representative menu raster succeeds");
-    run.expect(first.frame.width == 726 && first.frame.height == 446,
+    run.expect(first.frame.width == 906 && first.frame.height == 526,
                "the representative menu preserves its exact crop");
-    run.expect(first.frame.pixels.size() == 1295184,
+    run.expect(first.frame.pixels.size() == 1906224,
                "the representative menu publishes every RGBA byte");
     run.expect(first.frame.revision != 0,
                "the first accepted pixels carry a nonzero consumer revision");
     const std::uint64_t hash = pixelHash(first.frame);
-    if (hash != 15315704513010158052ULL)
+    if (hash != 2663227275962476376ULL)
         std::cerr << "actual pixel hash: " << hash << '\n';
-    run.expect(hash == 15315704513010158052ULL,
+    run.expect(hash == 2663227275962476376ULL,
                "the representative menu preserves its exact RGBA hash");
 
     RenderResult previous = first;
