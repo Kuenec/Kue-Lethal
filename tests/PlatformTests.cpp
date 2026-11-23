@@ -277,9 +277,9 @@ void testSystemFonts(TestRun& run) {
          {kue::platform::SystemFontRole::Body, kue::platform::SystemFontRole::Title}) {
         kue::platform::EnvironmentStorage storage;
         const kue::platform::SystemFontPath font = kue::platform::systemFontPath(role, storage);
-        run.expect(font.available &&
+        run.expect(font.available && font.path.find("DejaVuSans") != std::string_view::npos &&
                        std::filesystem::is_regular_file(std::filesystem::path(font.path), error),
-                   "a menu font is found when the host has DejaVu Sans");
+                   "the menu uses the host's DejaVu Sans on every build");
     }
 }
 

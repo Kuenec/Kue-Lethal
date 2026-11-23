@@ -107,23 +107,20 @@ SystemFontPath existingFont(std::string_view directory, std::string_view file,
 }
 
 SystemFontPath systemFontPath(SystemFontRole role, EnvironmentStorage& storage) noexcept {
-    EnvironmentStorage windowsDirectory;
-    const EnvironmentValue root = readEnvironment("WINDIR", windowsDirectory);
-    if (root.status == EnvironmentStatus::Valid) {
-        const SystemFontPath windowsFont = existingFont(
-            root.text,
-            role == SystemFontRole::Body ? "\\Fonts\\segoeui.ttf" : "\\Fonts\\segoeuib.ttf",
-            storage);
-        if (windowsFont.available)
-            return windowsFont;
-    }
     for (const std::string_view hostFont :
          role == SystemFontRole::Body ? kWineHostBodyFonts : kWineHostTitleFonts) {
         const SystemFontPath font = existingFont(hostFont, "", storage);
         if (font.available)
             return font;
     }
-    return {false, {}};
+    EnvironmentStorage windowsDirectory;
+    const EnvironmentValue root = readEnvironment("WINDIR", windowsDirectory);
+    if (root.status != EnvironmentStatus::Valid)
+        return {false, {}};
+    return existingFont(root.text,
+                        role == SystemFontRole::Body ? "\\Fonts\\DejaVuSans.ttf"
+                                                     : "\\Fonts\\DejaVuSans-Bold.ttf",
+                        storage);
 }
 
 }
