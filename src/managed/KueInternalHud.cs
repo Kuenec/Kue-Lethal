@@ -12,7 +12,6 @@ using UnityEngine.InputSystem;
 using UnityEngine.InputSystem.Controls;
 using UnityEngine.Rendering;
 using UnityEngine.Rendering.HighDefinition;
-using UnityEngine.SceneManagement;
 using UnityEngine.UI;
 
 namespace Kue.Internal
@@ -631,6 +630,10 @@ namespace Kue.Internal
         private static readonly MethodInfo ThrowObjectServerRpcMethod =
             typeof(PlayerControllerB)
                 .GetMethod("ThrowObjectServerRpc", BindingFlags.Instance | BindingFlags.NonPublic);
+        private static readonly MethodInfo SceneHashFromNameOrPathMethod =
+            typeof(NetworkSceneManager)
+                .GetMethod("SceneHashFromNameOrPath",
+                           BindingFlags.Instance | BindingFlags.NonPublic);
         private static readonly string[] HazardNameSuffixes = { "Hazard", "Container", "Type" };
         private static readonly string[] HelperLayerNames = { "ScanNode", "MapRadar" };
         private static readonly int GuiDepthTestId = Shader.PropertyToID("unity_GUIZTestMode");
@@ -1844,17 +1847,18 @@ namespace Kue.Internal
             return name;
         }
 
-        private static bool SceneInBuild(string sceneName)
+        private static bool SceneRegistered(NetworkSceneManager scenes, string sceneName)
         {
             if (string.IsNullOrEmpty(sceneName))
                 return false;
+            if (SceneHashFromNameOrPathMethod == null)
+                throw new MissingMethodException("NetworkSceneManager.SceneHashFromNameOrPath");
             try
             {
-                return SceneUtility.GetBuildIndexByScenePath(sceneName) >= 0 ||
-                       SceneUtility.GetBuildIndexByScenePath("Assets/Scenes/" + sceneName +
-                                                             ".unity") >= 0;
+                SceneHashFromNameOrPathMethod.Invoke(scenes, new object[] { sceneName });
+                return true;
             }
-            catch (Exception)
+            catch (TargetInvocationException)
             {
                 return false;
             }
@@ -1892,6 +1896,9 @@ namespace Kue.Internal
             StartOfRound round = StartOfRound.Instance;
             if (round == null || round.levels == null)
                 return;
+            NetworkSceneManager scenes = round.NetworkManager.SceneManager;
+            if (scenes == null)
+                return;
             RestoreSwappedLevel(round);
             SelectableLevel[] loaded = Resources.FindObjectsOfTypeAll<SelectableLevel>();
             moonCatalogSignature = MoonCatalogSignature(round, loaded.Length);
@@ -1906,7 +1913,7 @@ namespace Kue.Internal
                     continue;
                 moonCatalogBuffer.Add(level);
                 moonLevelBuffer.Add(i);
-                moonSceneBuffer.Add(SceneInBuild(level.sceneName));
+                moonSceneBuffer.Add(SceneRegistered(scenes, level.sceneName));
             }
             int routable = moonCatalogBuffer.Count;
             foreach (SelectableLevel level in loaded)
@@ -1915,7 +1922,7 @@ namespace Kue.Internal
                     continue;
                 moonCatalogBuffer.Add(level);
                 moonLevelBuffer.Add(-1);
-                moonSceneBuffer.Add(SceneInBuild(level.sceneName));
+                moonSceneBuffer.Add(SceneRegistered(scenes, level.sceneName));
             }
             if (moonCatalogBuffer.Count == 0)
                 return;
