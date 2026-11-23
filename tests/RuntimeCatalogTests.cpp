@@ -133,9 +133,8 @@ void expectInvalidUtf8(TestRun& run, std::string_view invalidName, std::uint64_t
     run.expect(gCatalogs.reportItem(asset(identity), name(invalidName)).result ==
                    kue::CatalogReportResult::InvalidUtf8,
                "a malformed UTF-8 sequence is rejected");
-    run.expect(gCatalogs.commitItemCatalog().failure.result ==
-                   kue::CatalogReportResult::InvalidUtf8,
-               "commit retains the invalid-UTF-8 cause");
+    run.expect(gCatalogs.commitItemCatalog().result == kue::CatalogCommitResult::EmptyCatalog,
+               "a transaction holding only a malformed name has nothing to publish");
 }
 
 void commitInstalledCatalogs(TestRun& run) {
@@ -301,6 +300,9 @@ void testNameAndIdentityBoundaries(TestRun& run) {
     run.expect(gCatalogs.reportEnemy(asset(0), name("enemy")).result ==
                    kue::CatalogReportResult::InvalidAsset,
                "zero is rejected as an opaque asset identity");
+    run.expect(gCatalogs.reportEnemy(asset(2), name("later")).result ==
+                   kue::CatalogReportResult::PriorReportFailed,
+               "a poisoned transaction rejects later reports");
     const kue::CatalogCommitOutcome invalidAssetCommit = gCatalogs.commitEnemyCatalog();
     run.expect(invalidAssetCommit.result == kue::CatalogCommitResult::PriorReportFailed &&
                    invalidAssetCommit.failure.result == kue::CatalogReportResult::InvalidAsset,
@@ -311,11 +313,8 @@ void testNameAndIdentityBoundaries(TestRun& run) {
     run.expect(gCatalogs.reportEnemy(asset(1), name("")).result ==
                    kue::CatalogReportResult::EmptyName,
                "an empty display name is rejected");
-    run.expect(gCatalogs.reportEnemy(asset(2), name("later")).result ==
-                   kue::CatalogReportResult::PriorReportFailed,
-               "a poisoned transaction rejects later reports");
-    run.expect(gCatalogs.commitEnemyCatalog().failure.result == kue::CatalogReportResult::EmptyName,
-               "a poisoned commit retains the first empty-name cause");
+    run.expect(gCatalogs.commitEnemyCatalog().result == kue::CatalogCommitResult::EmptyCatalog,
+               "a transaction holding only an empty name has nothing to publish");
 
     constexpr char embeddedNull[] = {'a', '\0', 'b'};
     run.expect(gCatalogs.beginItemCatalog() == kue::CatalogBeginResult::Begun,
@@ -324,9 +323,8 @@ void testNameAndIdentityBoundaries(TestRun& run) {
         gCatalogs.reportItem(asset(3), name(std::string_view{embeddedNull, sizeof(embeddedNull)}))
                 .result == kue::CatalogReportResult::EmbeddedNull,
         "an embedded null is rejected before storage");
-    run.expect(gCatalogs.commitItemCatalog().failure.result ==
-                   kue::CatalogReportResult::EmbeddedNull,
-               "commit retains the embedded-null cause");
+    run.expect(gCatalogs.commitItemCatalog().result == kue::CatalogCommitResult::EmptyCatalog,
+               "a transaction holding only an embedded-null name has nothing to publish");
 
     constexpr std::array<char, 2> overlongUtf8 = {static_cast<char>(0xc0), static_cast<char>(0xaf)};
     constexpr std::array<char, 2> truncatedUtf8 = {static_cast<char>(0xe2),
@@ -355,12 +353,13 @@ void testNameAndIdentityBoundaries(TestRun& run) {
 
     run.expect(gCatalogs.beginItemCatalog() == kue::CatalogBeginResult::Begun,
                "an overlong-name transaction begins");
-    run.expect(
-        gCatalogs.reportItem(asset(4), name(std::string_view{longName.data(), longName.size()}))
-                .result == kue::CatalogReportResult::NameTooLong,
-        "a 2,049-byte name is rejected");
-    run.expect(gCatalogs.commitItemCatalog().failure.limit == kue::kRuntimeCatalogNameCapacity,
-               "an overlong failure preserves the exact byte limit");
+    const kue::CatalogReportOutcome overlong =
+        gCatalogs.reportItem(asset(4), name(std::string_view{longName.data(), longName.size()}));
+    run.expect(overlong.result == kue::CatalogReportResult::NameTooLong &&
+                   overlong.limit == kue::kRuntimeCatalogNameCapacity,
+               "a name one byte past the limit is rejected with the exact byte limit");
+    run.expect(gCatalogs.commitItemCatalog().result == kue::CatalogCommitResult::EmptyCatalog,
+               "a transaction holding only an overlong name has nothing to publish");
 
     run.expect(gCatalogs.beginEnemyCatalog() == kue::CatalogBeginResult::Begun,
                "a duplicate transaction begins");
@@ -448,6 +447,45 @@ void testFailurePreservesLiveCatalog(TestRun& run) {
                "an explicit abort preserves the live catalog");
     run.expect(gCatalogs.abortEnemyCatalog() == kue::CatalogAbortResult::NoTransaction,
                "an abort without a transaction is explicit");
+}
+
+void testUnlistableEntriesAreLeftOut(TestRun& run) {
+    gCatalogs.resetForSessionEnd();
+    constexpr char embeddedNull[] = {'a', '\0', 'b'};
+    constexpr std::array<char, 2> truncatedUtf8 = {static_cast<char>(0xe2),
+                                                   static_cast<char>(0x82)};
+    std::array<char, kue::kRuntimeCatalogNameCapacity + 1> longName{};
+    longName.fill('x');
+
+    run.expect(gCatalogs.beginItemCatalog() == kue::CatalogBeginResult::Begun,
+               "a transaction with unlistable entries begins");
+    run.expect(gCatalogs.reportItem(asset(1), name("flashlight")).result ==
+                   kue::CatalogReportResult::Recorded,
+               "an entry before the unlistable ones is recorded");
+    run.expect(gCatalogs.reportItem(asset(2), name("")).result ==
+                   kue::CatalogReportResult::EmptyName,
+               "an empty name is rejected mid-transaction");
+    run.expect(
+        gCatalogs.reportItem(asset(3), name(std::string_view{embeddedNull, sizeof(embeddedNull)}))
+                .result == kue::CatalogReportResult::EmbeddedNull,
+        "an embedded null is rejected mid-transaction");
+    run.expect(gCatalogs
+                       .reportItem(asset(4), name(std::string_view{truncatedUtf8.data(),
+                                                                   truncatedUtf8.size()}))
+                       .result == kue::CatalogReportResult::InvalidUtf8,
+               "a malformed name is rejected mid-transaction");
+    run.expect(
+        gCatalogs.reportItem(asset(5), name(std::string_view{longName.data(), longName.size()}))
+                .result == kue::CatalogReportResult::NameTooLong,
+        "an overlong name is rejected mid-transaction");
+    run.expect(gCatalogs.reportItem(asset(6), name("shovel")).result ==
+                   kue::CatalogReportResult::Recorded,
+               "an entry after the unlistable ones is still recorded");
+    run.expect(gCatalogs.commitItemCatalog().result == kue::CatalogCommitResult::Committed,
+               "a transaction commits without its unlistable entries");
+    run.expect(gCatalogs.itemCount() == 2, "only the listable entries are published");
+    expectItem(run, {0, 1, "flashlight"});
+    expectItem(run, {1, 6, "shovel"});
 }
 
 void testInstalledWorkloadAndActivity(TestRun& run) {
@@ -609,19 +647,18 @@ void testFullCapacity(TestRun& run) {
                            .result == kue::CatalogReportResult::Recorded,
                    "every maximum-size catalog slot accepts a maximum-size name");
     }
-    run.expect(gCatalogs.reportEnemy(asset(999), name("overflow")).result ==
-                   kue::CatalogReportResult::CapacityExceeded,
-               "the entry past capacity is rejected before storage");
-    const kue::CatalogCommitOutcome overflow = gCatalogs.commitEnemyCatalog();
-    run.expect(overflow.result == kue::CatalogCommitResult::PriorReportFailed &&
-                   overflow.failure.actual == kue::kRuntimeCatalogCapacity + 1 &&
-                   overflow.failure.limit == kue::kRuntimeCatalogCapacity,
-               "capacity failure preserves exact actual and limit values");
-    run.expect(gCatalogs.enemyCount() == 0 && gCatalogs.enemyGeneration().value == 0,
-               "an over-capacity initial transaction publishes nothing");
+    const kue::CatalogReportOutcome overflow = gCatalogs.reportEnemy(asset(999), name("overflow"));
+    run.expect(overflow.result == kue::CatalogReportResult::CapacityExceeded &&
+                   overflow.actual == kue::kRuntimeCatalogCapacity + 1 &&
+                   overflow.limit == kue::kRuntimeCatalogCapacity,
+               "the entry past capacity is rejected with exact actual and limit values");
+    run.expect(gCatalogs.commitEnemyCatalog().result == kue::CatalogCommitResult::Committed,
+               "a full transaction commits without the entry past capacity");
+    run.expect(gCatalogs.enemyCount() == kue::kRuntimeCatalogCapacity,
+               "an over-capacity transaction publishes every entry that fit");
 
     run.expect(gCatalogs.beginEnemyCatalog() == kue::CatalogBeginResult::Begun,
-               "a full valid transaction begins after rejection");
+               "a second full transaction begins");
     for (std::size_t index = 0; index < kue::kRuntimeCatalogCapacity; ++index) {
         storage.fill('y');
         storage[0] = digits[index / 256];
@@ -631,10 +668,10 @@ void testFullCapacity(TestRun& run) {
                            .reportEnemy(asset(index + 1),
                                         name(std::string_view{storage.data(), storage.size()}))
                            .result == kue::CatalogReportResult::Recorded,
-                   "every bounded entry is accepted after a failed retry");
+                   "every bounded entry is accepted in a second full transaction");
     }
     run.expect(gCatalogs.commitEnemyCatalog().result == kue::CatalogCommitResult::Committed,
-               "a corrected full-capacity retry commits");
+               "a second full-capacity transaction commits");
     run.expect(gCatalogs.enemyCount() == kue::kRuntimeCatalogCapacity,
                "a full-capacity commit exposes every entry");
     run.expect(gCatalogs.enemyAt(kue::kRuntimeCatalogCapacity - 1).entry.name.size() ==
@@ -940,6 +977,7 @@ int main() {
     testDenseTransactionsAndTypedLookup(run);
     testNameAndIdentityBoundaries(run);
     testFailurePreservesLiveCatalog(run);
+    testUnlistableEntriesAreLeftOut(run);
     testInstalledWorkloadAndActivity(run);
     testFullCapacity(run);
     testUnchangedIdentityAndAllocation(run);

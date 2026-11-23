@@ -567,7 +567,6 @@ int MSABI reportEnemyType(int instanceId, mono::MonoObject* name) {
     std::array<char, mono::kManagedStringMaxUtf8Bytes> decodedBytes{};
     std::string_view decoded;
     if (!name || !readCatalogName(name, decodedBytes, decoded)) {
-        static_cast<void>(gRuntimeCatalogs.abortEnemyCatalog());
         return -1;
     }
     const CatalogReportOutcome outcome =
@@ -632,7 +631,6 @@ int MSABI reportItemType(int instanceId, mono::MonoObject* name) {
     std::array<char, mono::kManagedStringMaxUtf8Bytes> decodedBytes{};
     std::string_view decoded;
     if (!name || !readCatalogName(name, decodedBytes, decoded)) {
-        static_cast<void>(gRuntimeCatalogs.abortItemCatalog());
         return -1;
     }
     const CatalogReportOutcome outcome =
@@ -673,7 +671,6 @@ int MSABI reportMoonType(int instanceId, mono::MonoObject* name) {
     std::array<char, mono::kManagedStringMaxUtf8Bytes> decodedBytes{};
     std::string_view decoded;
     if (!name || !readCatalogName(name, decodedBytes, decoded)) {
-        static_cast<void>(gRuntimeCatalogs.abortMoonCatalog());
         return -1;
     }
     const CatalogReportOutcome outcome =
@@ -714,7 +711,6 @@ int MSABI reportHazardType(int instanceId, mono::MonoObject* name) {
     std::array<char, mono::kManagedStringMaxUtf8Bytes> decodedBytes{};
     std::string_view decoded;
     if (!name || !readCatalogName(name, decodedBytes, decoded)) {
-        static_cast<void>(gRuntimeCatalogs.abortHazardCatalog());
         return -1;
     }
     const CatalogReportOutcome outcome =

@@ -131,13 +131,10 @@ CatalogReportOutcome RuntimeCatalogs::reportCatalog(Transaction transaction,
 
     const std::size_t entryIndex = mStaging.count;
     if (entryIndex == kRuntimeCatalogCapacity) {
-        const CatalogReportOutcome failure =
-            catalogReport(CatalogReportResult::CapacityExceeded,
-                          {.entryIndex = entryIndex,
-                           .actual = static_cast<std::uint64_t>(entryIndex + 1),
-                           .limit = static_cast<std::uint64_t>(kRuntimeCatalogCapacity)});
-        failCatalog(failure);
-        return failure;
+        return catalogReport(CatalogReportResult::CapacityExceeded,
+                             {.entryIndex = entryIndex,
+                              .actual = static_cast<std::uint64_t>(entryIndex + 1),
+                              .limit = static_cast<std::uint64_t>(kRuntimeCatalogCapacity)});
     }
     if (runtimeAsset.value == 0) {
         const CatalogReportOutcome failure = catalogReport(
@@ -148,35 +145,26 @@ CatalogReportOutcome RuntimeCatalogs::reportCatalog(Transaction transaction,
 
     const std::size_t nameBytes = orderedName.utf8.size();
     if (nameBytes == 0) {
-        const CatalogReportOutcome failure = catalogReport(
-            CatalogReportResult::EmptyName, {.entryIndex = entryIndex, .actual = 0, .limit = 1});
-        failCatalog(failure);
-        return failure;
+        return catalogReport(CatalogReportResult::EmptyName,
+                             {.entryIndex = entryIndex, .actual = 0, .limit = 1});
     }
     if (nameBytes > kRuntimeCatalogNameCapacity) {
-        const CatalogReportOutcome failure =
-            catalogReport(CatalogReportResult::NameTooLong,
-                          {.entryIndex = entryIndex,
-                           .actual = static_cast<std::uint64_t>(nameBytes),
-                           .limit = static_cast<std::uint64_t>(kRuntimeCatalogNameCapacity)});
-        failCatalog(failure);
-        return failure;
+        return catalogReport(CatalogReportResult::NameTooLong,
+                             {.entryIndex = entryIndex,
+                              .actual = static_cast<std::uint64_t>(nameBytes),
+                              .limit = static_cast<std::uint64_t>(kRuntimeCatalogNameCapacity)});
     }
     if (std::memchr(orderedName.utf8.data(), 0, nameBytes)) {
-        const CatalogReportOutcome failure = catalogReport(
-            CatalogReportResult::EmbeddedNull, {.entryIndex = entryIndex,
-                                                .actual = static_cast<std::uint64_t>(nameBytes),
-                                                .limit = 0});
-        failCatalog(failure);
-        return failure;
+        return catalogReport(CatalogReportResult::EmbeddedNull,
+                             {.entryIndex = entryIndex,
+                              .actual = static_cast<std::uint64_t>(nameBytes),
+                              .limit = 0});
     }
     if (!isValidUtf8(orderedName.utf8)) {
-        const CatalogReportOutcome failure = catalogReport(
-            CatalogReportResult::InvalidUtf8, {.entryIndex = entryIndex,
-                                               .actual = static_cast<std::uint64_t>(nameBytes),
-                                               .limit = 0});
-        failCatalog(failure);
-        return failure;
+        return catalogReport(CatalogReportResult::InvalidUtf8,
+                             {.entryIndex = entryIndex,
+                              .actual = static_cast<std::uint64_t>(nameBytes),
+                              .limit = 0});
     }
 
     const std::uint64_t hash = nameHash(orderedName.utf8);

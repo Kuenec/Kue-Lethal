@@ -1750,19 +1750,25 @@ namespace Kue.Internal
                 return;
             }
             usedCatalogNames.Clear();
+            int listed = 0;
             for (int i = 0; i < enemyCatalogBuffer.Count; i++)
             {
                 EnemyType type = enemyCatalogBuffer[i];
                 CatalogReportResult report = NativeBridge.ReportEnemyType(
                     type.GetInstanceID(), UniqueCatalogName(type.enemyName));
-                if (report != CatalogReportResult.Recorded)
+                CatalogEntryListing listing =
+                    EntryListing(report, "enemy", type.name, enemyCatalogBuffer.Count - i);
+                if (listing == CatalogEntryListing.Listed)
+                    enemyCatalogBuffer[listed++] = type;
+                else if (listing == CatalogEntryListing.ListFull)
+                    break;
+                else if (listing == CatalogEntryListing.CatalogFailed)
                 {
                     NativeBridge.AbortEnemyCatalog();
-                    Debug.LogError("[Kue] Runtime enemy catalog report failed at " + i + ": " +
-                                   report);
                     return;
                 }
             }
+            enemyCatalogBuffer.RemoveRange(listed, enemyCatalogBuffer.Count - listed);
             CatalogCommitResult commit = NativeBridge.CommitEnemyCatalog();
             if (commit != CatalogCommitResult.Committed &&
                 commit != CatalogCommitResult.Unchanged)
@@ -1835,6 +1841,40 @@ namespace Kue.Internal
             for (int copy = 2; !usedCatalogNames.Add(candidate); copy++)
                 candidate = CatalogName(name) + " (" + copy + ")";
             return candidate;
+        }
+
+        private enum CatalogEntryListing
+        {
+            Listed,
+            LeftOut,
+            ListFull,
+            CatalogFailed
+        }
+
+        private static CatalogEntryListing EntryListing(CatalogReportResult report, string list,
+                                                        string assetName, int unreported)
+        {
+            switch (report)
+            {
+            case CatalogReportResult.Recorded:
+                return CatalogEntryListing.Listed;
+            case CatalogReportResult.CapacityExceeded:
+                Debug.LogWarning("[Kue] The " + list + " list is full; " + unreported +
+                                 " left out");
+                return CatalogEntryListing.ListFull;
+            case CatalogReportResult.ManagedNameUnavailable:
+            case CatalogReportResult.EmptyName:
+            case CatalogReportResult.EmbeddedNull:
+            case CatalogReportResult.InvalidUtf8:
+            case CatalogReportResult.NameTooLong:
+                Debug.LogWarning("[Kue] Left " + assetName + " out of the " + list + " list: " +
+                                 report);
+                return CatalogEntryListing.LeftOut;
+            default:
+                Debug.LogError("[Kue] Runtime " + list + " catalog report failed at " +
+                               assetName + ": " + report);
+                return CatalogEntryListing.CatalogFailed;
+            }
         }
 
         private static string MoonName(SelectableLevel level, bool unlisted, bool hasScene)
@@ -1915,7 +1955,6 @@ namespace Kue.Internal
                 moonLevelBuffer.Add(i);
                 moonSceneBuffer.Add(SceneRegistered(scenes, level.sceneName));
             }
-            int routable = moonCatalogBuffer.Count;
             foreach (SelectableLevel level in loaded)
             {
                 if (level == null || !catalogInstanceIds.Add(level.GetInstanceID()))
@@ -1933,6 +1972,8 @@ namespace Kue.Internal
                 return;
             }
             usedCatalogNames.Clear();
+            int listed = 0;
+            int routable = 0;
             for (int i = 0; i < moonCatalogBuffer.Count; i++)
             {
                 SelectableLevel level = moonCatalogBuffer[i];
@@ -1940,14 +1981,28 @@ namespace Kue.Internal
                     MoonName(level, moonLevelBuffer[i] < 0, moonSceneBuffer[i]));
                 CatalogReportResult report =
                     NativeBridge.ReportMoonType(level.GetInstanceID(), name);
-                if (report != CatalogReportResult.Recorded)
+                CatalogEntryListing listing =
+                    EntryListing(report, "moon", level.name, moonCatalogBuffer.Count - i);
+                if (listing == CatalogEntryListing.Listed)
+                {
+                    if (moonLevelBuffer[i] >= 0)
+                        routable++;
+                    moonCatalogBuffer[listed] = level;
+                    moonLevelBuffer[listed] = moonLevelBuffer[i];
+                    moonSceneBuffer[listed] = moonSceneBuffer[i];
+                    listed++;
+                }
+                else if (listing == CatalogEntryListing.ListFull)
+                    break;
+                else if (listing == CatalogEntryListing.CatalogFailed)
                 {
                     NativeBridge.AbortMoonCatalog();
-                    Debug.LogError("[Kue] Runtime moon catalog report failed at " + i + ": " +
-                                   report);
                     return;
                 }
             }
+            moonCatalogBuffer.RemoveRange(listed, moonCatalogBuffer.Count - listed);
+            moonLevelBuffer.RemoveRange(listed, moonLevelBuffer.Count - listed);
+            moonSceneBuffer.RemoveRange(listed, moonSceneBuffer.Count - listed);
             CatalogCommitResult commit = NativeBridge.CommitMoonCatalog();
             if (commit != CatalogCommitResult.Committed &&
                 commit != CatalogCommitResult.Unchanged)
@@ -2106,19 +2161,25 @@ namespace Kue.Internal
                 return;
             }
             usedCatalogNames.Clear();
+            int listed = 0;
             for (int i = 0; i < itemCatalogBuffer.Count; i++)
             {
                 Item item = itemCatalogBuffer[i];
                 CatalogReportResult report = NativeBridge.ReportItemType(
                     item.GetInstanceID(), UniqueCatalogName(item.itemName));
-                if (report != CatalogReportResult.Recorded)
+                CatalogEntryListing listing =
+                    EntryListing(report, "item", item.name, itemCatalogBuffer.Count - i);
+                if (listing == CatalogEntryListing.Listed)
+                    itemCatalogBuffer[listed++] = item;
+                else if (listing == CatalogEntryListing.ListFull)
+                    break;
+                else if (listing == CatalogEntryListing.CatalogFailed)
                 {
                     NativeBridge.AbortItemCatalog();
-                    Debug.LogError("[Kue] Runtime item catalog report failed at " + i + ": " +
-                                   report);
                     return;
                 }
             }
+            itemCatalogBuffer.RemoveRange(listed, itemCatalogBuffer.Count - listed);
             CatalogCommitResult commit = NativeBridge.CommitItemCatalog();
             if (commit != CatalogCommitResult.Committed &&
                 commit != CatalogCommitResult.Unchanged)
@@ -3793,18 +3854,25 @@ namespace Kue.Internal
                 return;
             }
             usedCatalogNames.Clear();
+            int listed = 0;
             for (int i = 0; i < hazardCatalogBuffer.Count; i++)
             {
+                GameObject prefab = hazardCatalogBuffer[i];
                 CatalogReportResult report = NativeBridge.ReportHazardType(
-                    hazardCatalogBuffer[i].GetInstanceID(), UniqueCatalogName(hazardNameBuffer[i]));
-                if (report != CatalogReportResult.Recorded)
+                    prefab.GetInstanceID(), UniqueCatalogName(hazardNameBuffer[i]));
+                CatalogEntryListing listing =
+                    EntryListing(report, "trap", prefab.name, hazardCatalogBuffer.Count - i);
+                if (listing == CatalogEntryListing.Listed)
+                    hazardCatalogBuffer[listed++] = prefab;
+                else if (listing == CatalogEntryListing.ListFull)
+                    break;
+                else if (listing == CatalogEntryListing.CatalogFailed)
                 {
                     NativeBridge.AbortHazardCatalog();
-                    Debug.LogError("[Kue] Runtime trap catalog report failed at " + i + ": " +
-                                   report);
                     return;
                 }
             }
+            hazardCatalogBuffer.RemoveRange(listed, hazardCatalogBuffer.Count - listed);
             CatalogCommitResult commit = NativeBridge.CommitHazardCatalog();
             if (commit != CatalogCommitResult.Committed && commit != CatalogCommitResult.Unchanged)
             {
