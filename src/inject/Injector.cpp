@@ -476,9 +476,18 @@ int waitForRuntime(const Settings& settings, const std::string& identity, std::u
         if (!freshLog(settings.log, logStart, fresh))
             return 1;
         if (fresh.find(identity) != std::string::npos &&
-            fresh.find("main-thread HUD installer armed") != std::string::npos) {
+            fresh.find("lethal: HUD armed on the render loop") != std::string::npos) {
             armed = true;
             break;
+        }
+        if (fresh.find("lethal: internal Unity HUD unavailable") != std::string::npos ||
+            fresh.find("lethal: internal Unity HUD Arm threw") != std::string::npos) {
+            constexpr std::array<std::string_view, 2> failureNeedles = {"internal Unity HUD",
+                                                                        "internal HUD:"};
+            report("module started but the HUD could not be armed:");
+            printMatchingLines(fresh, failureNeedles, 10);
+            report("exit the game before retrying; no second copy will run");
+            return 1;
         }
         std::this_thread::sleep_for(kLogPollInterval);
     }
@@ -489,33 +498,23 @@ int waitForRuntime(const Settings& settings, const std::string& identity, std::u
         return 1;
     }
     report("injection complete - identity confirmed (log: %s)", settings.log.c_str());
-    report("HUD should appear after the late Update hook runs");
-    constexpr std::array<std::string_view, 3> installedNeedles = {
-        "late HUD installer attempt", "late HUD installer active", "internal Unity HUD installed"};
-    constexpr std::array<std::string_view, 5> exhaustedNeedles = {
-        "late HUD installer attempt", "mono: target method", "mono: compiled Update",
-        "mono: could not allocate", "mono: could not make"};
-    constexpr std::array<std::string_view, 3> armNeedles = {
-        "late HUD installer attempt", "mono: target method", "main-thread HUD installer armed"};
+    report("HUD will install on the next rendered frame");
+    constexpr std::array<std::string_view, 3> deliveryNeedles = {
+        "lethal: HUD armed on the render loop", "internal Unity HUD", "internal HUD:"};
     const auto hudDeadline = std::chrono::steady_clock::now() + kHudTimeout;
     while (std::chrono::steady_clock::now() < hudDeadline) {
         if (!freshLog(settings.log, logStart, fresh))
             return 1;
-        if (fresh.find("internal Unity HUD installed") != std::string::npos) {
-            report("HUD delivery hook confirmed");
-            printMatchingLines(fresh, installedNeedles, 10);
+        if (fresh.find("lethal: internal Unity HUD installed") != std::string::npos) {
+            report("HUD delivery confirmed");
+            printMatchingLines(fresh, deliveryNeedles, 10);
             return 0;
-        }
-        if (fresh.find("late HUD installer attempt 5/5") != std::string::npos) {
-            report("identity matched, but the live hook exhausted retries:");
-            printMatchingLines(fresh, exhaustedNeedles, 14);
-            return 1;
         }
         std::this_thread::sleep_for(kLogPollInterval);
     }
     if (!freshLog(settings.log, logStart, fresh))
         return 1;
-    printMatchingLines(fresh, armNeedles, 10);
+    printMatchingLines(fresh, deliveryNeedles, 10);
     report("error: HUD delivery was not confirmed within 15 seconds");
     report("module remains loaded; fully exit the game before retrying");
     return 1;

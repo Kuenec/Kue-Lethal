@@ -22,9 +22,6 @@ set(KUE_JSON_SOURCE_DIR "" CACHE PATH "nlohmann/json 3.11.3 source directory use
 if(KUE_BUILD_MODULE)
   set(KUE_IMGUI_SOURCE_DIR "" CACHE PATH "Dear ImGui 1.91.9b source directory used when fetching is disabled")
   set(KUE_GAME_MANAGED_DIR "" CACHE PATH "Lethal Company Managed assembly directory")
-  if(WIN32)
-    set(KUE_CAPSTONE_SOURCE_DIR "" CACHE PATH "Capstone 5.0.9 source directory used when fetching is disabled")
-  endif()
 endif()
 
 if(NOT CMAKE_SYSTEM_NAME MATCHES "^(Linux|Windows)$" OR
@@ -190,10 +187,6 @@ if(KUE_BUILD_MODULE OR BUILD_TESTING)
 endif()
 
 if(KUE_BUILD_MODULE)
-  if(NOT WIN32)
-    find_package(PkgConfig REQUIRED)
-    pkg_check_modules(CAPSTONE REQUIRED IMPORTED_TARGET capstone>=5.0 capstone<6.0)
-  endif()
   find_program(KUE_WINE_EXECUTABLE wine REQUIRED)
   find_program(KUE_WINEPATH_EXECUTABLE winepath REQUIRED)
 
@@ -274,14 +267,6 @@ if(KUE_BUILD_MODULE AND NOT KUE_FETCH_DEPS)
     )
   endif()
   set(imgui_source_SOURCE_DIR "${KUE_IMGUI_SOURCE_DIR}")
-  if(WIN32)
-    if(NOT KUE_CAPSTONE_SOURCE_DIR)
-      message(FATAL_ERROR
-        "KUE_FETCH_DEPS=OFF requires KUE_CAPSTONE_SOURCE_DIR to name a Capstone 5.0.9 source tree"
-      )
-    endif()
-    set(capstone_source_SOURCE_DIR "${KUE_CAPSTONE_SOURCE_DIR}")
-  endif()
 endif()
 
 add_library(kue-platform STATIC ${KUE_PLATFORM_SOURCES})
@@ -335,52 +320,12 @@ if(KUE_BUILD_MODULE)
   )
   target_include_directories(imgui SYSTEM PUBLIC "${imgui_source_SOURCE_DIR}")
 
-  if(WIN32)
-    if(NOT EXISTS "${capstone_source_SOURCE_DIR}/CMakeLists.txt" OR
-       NOT EXISTS "${capstone_source_SOURCE_DIR}/include/capstone/capstone.h")
-      message(FATAL_ERROR "Capstone source is incomplete: ${capstone_source_SOURCE_DIR}")
-    endif()
-    file(STRINGS "${capstone_source_SOURCE_DIR}/ChangeLog" KUE_CAPSTONE_VERSION_LINE
-         REGEX "^Version 5\\.0\\.9" LIMIT_COUNT 1)
-    if(NOT KUE_CAPSTONE_VERSION_LINE)
-      message(FATAL_ERROR "Capstone source must be exactly version 5.0.9")
-    endif()
-    enable_language(C)
-    set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
-    set(BUILD_STATIC_LIBS ON CACHE BOOL "" FORCE)
-    set(CAPSTONE_ARCHITECTURE_DEFAULT OFF CACHE BOOL "" FORCE)
-    set(CAPSTONE_X86_SUPPORT ON CACHE BOOL "" FORCE)
-    set(CAPSTONE_BUILD_TESTS OFF CACHE BOOL "" FORCE)
-    set(CAPSTONE_BUILD_CSTOOL OFF CACHE BOOL "" FORCE)
-    set(CAPSTONE_BUILD_CSTEST OFF CACHE BOOL "" FORCE)
-    set(CAPSTONE_INSTALL OFF CACHE BOOL "" FORCE)
-    add_subdirectory("${capstone_source_SOURCE_DIR}" "${CMAKE_BINARY_DIR}/capstone" EXCLUDE_FROM_ALL)
-    set(KUE_CAPSTONE_TARGET capstone_static)
-    file(GLOB KUE_CAPSTONE_BUILD_INPUTS LIST_DIRECTORIES FALSE RELATIVE "${capstone_source_SOURCE_DIR}"
-      "${capstone_source_SOURCE_DIR}/CMakeLists.txt"
-      "${capstone_source_SOURCE_DIR}/*.c"
-      "${capstone_source_SOURCE_DIR}/*.h"
-      "${capstone_source_SOURCE_DIR}/arch/X86/*"
-      "${capstone_source_SOURCE_DIR}/include/capstone/*.h"
-    )
-    list(SORT KUE_CAPSTONE_BUILD_INPUTS)
-    foreach(KUE_CAPSTONE_BUILD_INPUT IN LISTS KUE_CAPSTONE_BUILD_INPUTS)
-      list(APPEND KUE_BUILD_IDENTITY_DEPENDENCY_LABELS "capstone/${KUE_CAPSTONE_BUILD_INPUT}")
-      list(APPEND KUE_BUILD_IDENTITY_DEPENDENCY_PATHS
-        "${capstone_source_SOURCE_DIR}/${KUE_CAPSTONE_BUILD_INPUT}"
-      )
-    endforeach()
-  else()
-    set(KUE_CAPSTONE_TARGET PkgConfig::CAPSTONE)
-  endif()
-
   add_library(kuelethal MODULE ${KUE_PRODUCTION_SOURCES})
   target_include_directories(kuelethal PRIVATE src)
   target_compile_options(kuelethal PRIVATE ${KUE_STRICT_COMPILE_OPTIONS})
   target_link_libraries(kuelethal PRIVATE
     imgui
     nlohmann_json::nlohmann_json
-    ${KUE_CAPSTONE_TARGET}
     Threads::Threads
     kue-platform
   )
@@ -558,43 +503,6 @@ if(KUE_BUILD_MODULE)
     )
   endforeach()
 
-  if(NOT WIN32)
-    find_path(KUE_CAPSTONE_HEADER_ROOT capstone/capstone.h REQUIRED)
-    set(KUE_CAPSTONE_BUILD_HEADERS
-      arm.h
-      arm64.h
-      bpf.h
-      capstone.h
-      evm.h
-      m680x.h
-      m68k.h
-      mips.h
-      mos65xx.h
-      platform.h
-      ppc.h
-      riscv.h
-      sh.h
-      sparc.h
-      systemz.h
-      tms320c64x.h
-      tricore.h
-      wasm.h
-      x86.h
-      xcore.h
-    )
-    foreach(KUE_CAPSTONE_BUILD_HEADER IN LISTS KUE_CAPSTONE_BUILD_HEADERS)
-      list(APPEND KUE_BUILD_IDENTITY_DEPENDENCY_LABELS
-        "capstone/include/${KUE_CAPSTONE_BUILD_HEADER}"
-      )
-      list(APPEND KUE_BUILD_IDENTITY_DEPENDENCY_PATHS
-        "${KUE_CAPSTONE_HEADER_ROOT}/capstone/${KUE_CAPSTONE_BUILD_HEADER}"
-      )
-    endforeach()
-    find_library(KUE_CAPSTONE_LIBRARY_FILE NAMES capstone HINTS ${CAPSTONE_LIBRARY_DIRS} REQUIRED)
-    list(APPEND KUE_BUILD_IDENTITY_DEPENDENCY_LABELS capstone/library)
-    list(APPEND KUE_BUILD_IDENTITY_DEPENDENCY_PATHS "${KUE_CAPSTONE_LIBRARY_FILE}")
-  endif()
-
   set(KUE_MANAGED_SOURCE "${CMAKE_SOURCE_DIR}/src/managed/KueInternalHud.cs")
   set(KUE_MANAGED_HUD "${CMAKE_BINARY_DIR}/managed/KueInternalHud.dll")
   get_filename_component(KUE_WINE_DIRECTORY "${KUE_WINE_EXECUTABLE}" DIRECTORY)
@@ -655,8 +563,7 @@ foreach(KUE_BUILD_IDENTITY_VARIABLE
         CMAKE_DL_LIBS
         CMAKE_THREAD_LIBS_INIT
         KUE_FETCH_DEPS
-        KUE_BUILD_MODULE
-        CAPSTONE_capstone_VERSION)
+        KUE_BUILD_MODULE)
   string(REPLACE ";" "," KUE_BUILD_IDENTITY_VALUE
          "${${KUE_BUILD_IDENTITY_VARIABLE}}")
   string(APPEND KUE_BUILD_IDENTITY_CONFIGURATION
@@ -818,12 +725,6 @@ if(BUILD_TESTING)
       COMMAND "${CMAKE_COMMAND}" -E env "CXX=${CMAKE_CXX_COMPILER}"
               "${KUE_BASH_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tests/ScriptTests.sh" build-identity
     )
-    add_test(
-      NAME kue-inject-environment
-      COMMAND "${CMAKE_COMMAND}" -E env "CXX=${CMAKE_CXX_COMPILER}"
-              "${KUE_BASH_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tests/ScriptTests.sh" inject-environment
-    )
-    set_tests_properties(kue-inject-environment PROPERTIES TIMEOUT 10)
   endif()
 
   if(KUE_BUILD_MODULE)
@@ -850,7 +751,6 @@ if(BUILD_TESTING)
         src/mono/Runtime.cpp
       )
       target_link_libraries(kue-mono-runtime-tests PRIVATE
-        ${KUE_CAPSTONE_TARGET}
         Threads::Threads
         kue-platform
       )

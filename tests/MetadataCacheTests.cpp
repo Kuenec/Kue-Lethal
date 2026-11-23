@@ -8,8 +8,6 @@
 #include <cstring>
 #include <iostream>
 #include <new>
-#include <pthread.h>
-#include <sched.h>
 #include <string_view>
 
 namespace {
@@ -38,14 +36,12 @@ class TestRun final {
 std::atomic<bool> gMeasureAllocations{false};
 std::atomic<std::size_t> gAllocations{0};
 std::atomic<int> gFieldResolutions{0};
-std::atomic<int> gMethodResolutions{0};
 std::atomic<bool> gRuntimeMemberLookupAvailable{true};
 int gClassResolutions = 0;
 kue::mono::ManagedClassLocation gLastClassLocation{nullptr, nullptr, nullptr};
 kue::mono::ClassLookupResult gNextClassLookup{};
 alignas(std::max_align_t) std::byte gClassStorage[2];
 alignas(std::max_align_t) std::byte gFieldStorage[1];
-alignas(std::max_align_t) std::byte gMethodStorage[1];
 
 void recordAllocation() {
     if (gMeasureAllocations.load(std::memory_order_relaxed))
@@ -70,38 +66,10 @@ kue::mono::MonoClassField* resolveField(const kue::mono::MonoClass*, const char*
     return reinterpret_cast<kue::mono::MonoClassField*>(gFieldStorage);
 }
 
-kue::mono::MonoMethod* resolveMethod(const kue::mono::MonoClass*, const char*, int) {
-    gMethodResolutions.fetch_add(1, std::memory_order_relaxed);
-    return reinterpret_cast<kue::mono::MonoMethod*>(gMethodStorage);
-}
-
 template <typename Member>
 void expectStatus(TestRun& run, const kue::unity::MetadataLookupResult<Member>& result,
                   kue::unity::MetadataLookupStatus status, std::string_view contract) {
     run.expect(result.status == status, contract);
-}
-
-struct MethodWorkerContext final {
-    kue::mono::MonoClass* type;
-    kue::unity::MetadataLookupResult<kue::mono::MonoMethod>* result;
-    std::atomic<std::size_t>* readyWorkers;
-    std::atomic<std::size_t>* finishedWorkers;
-    std::atomic<bool>* start;
-    bool failed = false;
-};
-
-void* resolveMethodInWorker(void* rawContext) noexcept {
-    auto& context = *static_cast<MethodWorkerContext*>(rawContext);
-    context.readyWorkers->fetch_add(1, std::memory_order_release);
-    while (!context.start->load(std::memory_order_acquire))
-        ::sched_yield();
-    try {
-        *context.result = kue::unity::cachedMethod(context.type, "Update", 0);
-    } catch (...) {
-        context.failed = true;
-    }
-    context.finishedWorkers->fetch_add(1, std::memory_order_release);
-    return nullptr;
 }
 
 }
@@ -142,13 +110,6 @@ FieldLookupResult findField(const MonoClass* type, const char* name) noexcept {
     MonoClassField* const field = resolveField(type, name);
     return {field, field ? MetadataMemberLookupStatus::Resolved
                          : MetadataMemberLookupStatus::MissingMember};
-}
-
-MethodLookupResult findMethod(const MonoClass* type, const char* name,
-                              int parameterCount) noexcept {
-    MonoMethod* const method = resolveMethod(type, name, parameterCount);
-    return {method, method ? MetadataMemberLookupStatus::Resolved
-                           : MetadataMemberLookupStatus::MissingMember};
 }
 
 ClassLookupResult findClass(ManagedClassLocation location) noexcept {
@@ -296,72 +257,6 @@ void testValidationAndFieldCache(TestRun& run, kue::mono::MonoClass* firstType,
                "a capacity rejection does not call the runtime resolver");
 }
 
-void testMethodCacheConcurrency(TestRun& run, kue::mono::MonoClass* firstType,
-                                kue::mono::MonoClass* secondType) {
-    using kue::unity::MetadataLookupStatus;
-    expectStatus(run, kue::unity::cachedMethod(firstType, "Update", -1),
-                 MetadataLookupStatus::InvalidParameterCount,
-                 "a negative method parameter count is rejected");
-
-    constexpr std::size_t workerCount = 8;
-    std::array<pthread_t, workerCount> workers{};
-    std::array<kue::unity::MetadataLookupResult<kue::mono::MonoMethod>, workerCount> results{};
-    std::array<MethodWorkerContext, workerCount> contexts{};
-    std::atomic<std::size_t> readyWorkers{0};
-    std::atomic<std::size_t> finishedWorkers{0};
-    std::atomic<bool> start{false};
-    std::size_t createdWorkers = 0;
-    for (std::size_t index = 0; index < workers.size(); ++index) {
-        contexts[index] = {.type = firstType,
-                           .result = &results[index],
-                           .readyWorkers = &readyWorkers,
-                           .finishedWorkers = &finishedWorkers,
-                           .start = &start,
-                           .failed = false};
-        const int createResult =
-            ::pthread_create(&workers[index], nullptr, &resolveMethodInWorker, &contexts[index]);
-        if (createResult != 0) {
-            run.expect(false, "every concurrent metadata worker starts");
-            start.store(true, std::memory_order_release);
-            for (std::size_t created = 0; created < createdWorkers; ++created) {
-                if (::pthread_join(workers[created], nullptr) != 0)
-                    run.expect(false, "a started metadata worker joins after setup failure");
-            }
-            return;
-        }
-        ++createdWorkers;
-    }
-    while (readyWorkers.load(std::memory_order_acquire) != workers.size())
-        ::sched_yield();
-    gMethodResolutions.store(0, std::memory_order_relaxed);
-    gMeasureAllocations.store(true, std::memory_order_relaxed);
-    start.store(true, std::memory_order_release);
-    while (finishedWorkers.load(std::memory_order_acquire) != workers.size())
-        ::sched_yield();
-    gMeasureAllocations.store(false, std::memory_order_relaxed);
-    for (const pthread_t worker : workers)
-        run.expect(::pthread_join(worker, nullptr) == 0, "every metadata worker joins");
-    for (std::size_t index = 0; index < results.size(); ++index) {
-        run.expect(!contexts[index].failed, "concurrent metadata resolution does not throw");
-        const auto& result = results[index];
-        run.expect(result.status == MetadataLookupStatus::Resolved,
-                   "concurrent callers observe the resolved method");
-    }
-    run.expect(gMethodResolutions.load(std::memory_order_relaxed) == 1,
-               "concurrent cold misses resolve exactly once");
-
-    gMeasureAllocations.store(true, std::memory_order_relaxed);
-    const auto differentType = kue::unity::cachedMethod(secondType, "Update", 0);
-    gMeasureAllocations.store(false, std::memory_order_relaxed);
-    run.expect(differentType.status == MetadataLookupStatus::Resolved,
-               "the same method name on a different type has its own key");
-    run.expect(gMethodResolutions.load(std::memory_order_relaxed) == 2,
-               "a different method declaring type performs a distinct resolution");
-    expectStatus(run, kue::unity::cachedMethod(firstType, "Update", 1),
-                 MetadataLookupStatus::CapacityExceeded,
-                 "a different arity is a distinct key subject to the exact two-key bound");
-}
-
 }
 
 int main() {
@@ -372,13 +267,9 @@ int main() {
     gMeasureAllocations.store(true, std::memory_order_relaxed);
     testGameClassLocation(run, firstType);
     testValidationAndFieldCache(run, firstType, secondType);
-    gMeasureAllocations.store(false, std::memory_order_relaxed);
-    testMethodCacheConcurrency(run, firstType, secondType);
-    gMeasureAllocations.store(true, std::memory_order_relaxed);
     for (std::size_t index = 0; index < 1000; ++index) {
         static_cast<void>(kue::unity::cachedField(firstType, "health"));
         static_cast<void>(kue::unity::cachedField(firstType, "missingField"));
-        static_cast<void>(kue::unity::cachedMethod(firstType, "Update", 0));
     }
     gMeasureAllocations.store(false, std::memory_order_relaxed);
     run.expect(gAllocations.load(std::memory_order_relaxed) == 0,

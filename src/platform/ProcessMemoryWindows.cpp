@@ -67,29 +67,4 @@ bool MemoryRegionScan::next(MemoryRegion& region) noexcept {
     return false;
 }
 
-std::size_t pageSize() noexcept {
-    SYSTEM_INFO information{};
-    ::GetSystemInfo(&information);
-    return information.dwPageSize > 0 ? static_cast<std::size_t>(information.dwPageSize) : 4096;
-}
-
-void* reserveNear(std::uintptr_t address, std::size_t bytes) noexcept {
-    return ::VirtualAlloc(std::bit_cast<LPVOID>(address), bytes, MEM_RESERVE | MEM_COMMIT,
-                          PAGE_READWRITE);
-}
-
-void releaseReservation(void* address, std::size_t bytes) noexcept {
-    static_cast<void>(bytes);
-    static_cast<void>(::VirtualFree(address, 0, MEM_RELEASE));
-}
-
-bool setProtection(void* address, std::size_t bytes, PageProtection protection) noexcept {
-    DWORD previous = 0;
-    return ::VirtualProtect(address, bytes, protection, &previous) != 0;
-}
-
-void flushInstructionCache(void* address, std::size_t bytes) noexcept {
-    static_cast<void>(::FlushInstructionCache(::GetCurrentProcess(), address, bytes));
-}
-
 }

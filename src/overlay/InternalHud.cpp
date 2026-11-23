@@ -558,6 +558,10 @@ void MSABI resetRuntimeCatalogs() {
     gRuntimeCatalogs.resetForSessionEnd();
 }
 
+void MSABI reportHudInstalled() {
+    KUE_INFO("lethal: internal Unity HUD installed");
+}
+
 int MSABI beginEnemyCatalog() {
     return static_cast<int>(gRuntimeCatalogs.beginEnemyCatalog());
 }
@@ -794,6 +798,9 @@ bool registerManagedBridge() {
     const bool catalogReset =
         mono::addInternalCall("Kue.Internal.NativeBridge::ResetRuntimeCatalogs",
                               reinterpret_cast<const void*>(&resetRuntimeCatalogs));
+    const bool installReport =
+        mono::addInternalCall("Kue.Internal.NativeBridge::ReportHudInstalled",
+                              reinterpret_cast<const void*>(&reportHudInstalled));
     const bool sessionState =
         mono::addInternalCall("Kue.Internal.NativeBridge::ReportSessionState",
                               reinterpret_cast<const void*>(&reportSessionState)) &&
@@ -856,10 +863,10 @@ bool registerManagedBridge() {
         mono::addInternalCall("Kue.Internal.NativeBridge::AbortHazardCatalog",
                               reinterpret_cast<const void*>(&abortHazardCatalog));
     const bool registered =
-        render && hudConfig && color && actions && catalogReset && sessionState && catalogBegin &&
-        catalogEntry && catalogCommit && catalogAbort && activeCatalogBegin && activeCatalogEntry &&
-        activeCatalogCommit && activeCatalogAbort && itemCatalogBegin && itemCatalogEntry &&
-        itemCatalogCommit && itemCatalogAbort && moonCatalog && hazardCatalog;
+        render && hudConfig && color && actions && catalogReset && installReport && sessionState &&
+        catalogBegin && catalogEntry && catalogCommit && catalogAbort && activeCatalogBegin &&
+        activeCatalogEntry && activeCatalogCommit && activeCatalogAbort && itemCatalogBegin &&
+        itemCatalogEntry && itemCatalogCommit && itemCatalogAbort && moonCatalog && hazardCatalog;
     if (registered)
         KUE_INFO("internal HUD: Mono bridge registered");
     return registered;

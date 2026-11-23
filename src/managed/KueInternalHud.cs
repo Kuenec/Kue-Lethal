@@ -219,6 +219,9 @@ namespace Kue.Internal
         internal static extern void ResetRuntimeCatalogs();
 
         [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern void ReportHudInstalled();
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
         internal static extern void ReportSessionState(int switches, int world,
                                                        long playersInFacility, int lureClientId,
                                                        int lureSecondsLeft);
@@ -297,8 +300,15 @@ namespace Kue.Internal
     {
         private static GameObject host;
 
-        public static void Install()
+        public static void Arm()
         {
+            RenderPipelineManager.beginContextRendering -= InstallOnRender;
+            RenderPipelineManager.beginContextRendering += InstallOnRender;
+        }
+
+        private static void InstallOnRender(ScriptableRenderContext context, List<Camera> cameras)
+        {
+            RenderPipelineManager.beginContextRendering -= InstallOnRender;
             if (host != null || UnityEngine.Object.FindObjectOfType<KueHud>() != null)
                 return;
             host = new GameObject("Kue.InternalHud");
@@ -306,6 +316,7 @@ namespace Kue.Internal
             host.hideFlags = HideFlags.HideAndDontSave;
             host.AddComponent<KueHud>();
             Debug.Log("[Kue] Internal Unity/ImGui HUD installed");
+            NativeBridge.ReportHudInstalled();
         }
     }
 

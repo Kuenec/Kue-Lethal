@@ -25,16 +25,12 @@ enum class LethalWorkerState : std::uint8_t {
     Failed
 };
 
-enum class MetadataMemberKind : std::uint8_t { Field, Method };
-
 class MetadataFailureReporter final {
   public:
-    static constexpr std::size_t kCapacity =
-        unity::kFieldMetadataCacheCapacity + unity::kMethodMetadataCacheCapacity;
+    static constexpr std::size_t kCapacity = unity::kFieldMetadataCacheCapacity;
 
     void reset() noexcept;
-    void report(MetadataMemberKind kind, const mono::MonoClass* type, const char* name,
-                unity::MetadataLookupStatus status);
+    void report(const mono::MonoClass* type, const char* name, unity::MetadataLookupStatus status);
 
   private:
     enum class MetadataFailureRecordResult : std::uint8_t { Recorded, Duplicate, CapacityExceeded };
@@ -43,32 +39,29 @@ class MetadataFailureReporter final {
         const mono::MonoClass* type = nullptr;
         std::string_view name;
         unity::MetadataLookupStatus status = unity::MetadataLookupStatus::Resolved;
-        MetadataMemberKind kind = MetadataMemberKind::Field;
     };
 
     static constexpr std::size_t kSingletonInstanceFieldRequirementCount = 6;
     static constexpr std::size_t kLocalPlayerReferenceFieldRequirementCount = 2;
     static constexpr std::size_t kPlayerSnapshotFieldRequirementCount = 9;
     static constexpr std::size_t kLocalPlayerStateFieldRequirementCount = 2;
-    static constexpr std::size_t kHudInstallMethodRequirementCount = 2;
     static constexpr std::size_t kFieldMetadataFailureCapacity =
         kSingletonInstanceFieldRequirementCount + kLocalPlayerReferenceFieldRequirementCount +
         kPlayerSnapshotFieldRequirementCount + kLocalPlayerStateFieldRequirementCount;
     static_assert(kFieldMetadataFailureCapacity == unity::kFieldMetadataCacheCapacity);
-    static_assert(kHudInstallMethodRequirementCount == unity::kMethodMetadataCacheCapacity);
-    static_assert(kCapacity == kFieldMetadataFailureCapacity + kHudInstallMethodRequirementCount);
-    static_assert(kCapacity == 21);
+    static_assert(kCapacity == kFieldMetadataFailureCapacity);
+    static_assert(kCapacity == 19);
 
     [[nodiscard]] MetadataFailureRecordResult record(const MetadataFailure& failure) noexcept;
     std::array<MetadataFailure, kCapacity> mFailures{};
     std::uint8_t mFailureCount = 0;
 };
 
-enum class GameClassKind : std::uint8_t { Player, Network, Round, Menu };
+enum class GameClassKind : std::uint8_t { Player, Network, Round };
 
 class GameClassFailureReporter final {
   public:
-    static constexpr std::size_t kClassCount = 4;
+    static constexpr std::size_t kClassCount = 3;
     static constexpr std::size_t kFailureStatusCount = 5;
     static constexpr std::size_t kCapacity = kClassCount * kFailureStatusCount;
 
@@ -110,7 +103,6 @@ class LethalState final {
         GameClassState player;
         GameClassState network;
         GameClassState round;
-        GameClassState menu;
     };
 
     void run();
@@ -120,8 +112,6 @@ class LethalState final {
     bool poll();
     mono::MonoClassField* requiredField(const mono::MonoClass* type, const char* name,
                                         unity::MetadataLookupResult<mono::MonoClassField> result);
-    mono::MonoMethod* requiredMethod(const mono::MonoClass* type, const char* name,
-                                     unity::MetadataLookupResult<mono::MonoMethod> result);
     mono::MonoObject* readRefField(mono::MonoObject* object, const mono::MonoClass* type,
                                    const char* name);
     StaticObjectRead readStaticNamed(mono::MonoClass* type, const char* name,
@@ -132,8 +122,7 @@ class LethalState final {
     mono::MonoObject* resolveLocalPlayer();
     mono::MonoObject* resolveRoundInstance();
     bool gatherPlayers(PlayerSnapshotTransaction& transaction);
-    void installHudOnMainThread();
-    static void mainThreadInstallThunk(void* context);
+    void armHud();
     std::thread mThread;
     std::mutex mLifecycleMutex;
     std::mutex mWaitMutex;
@@ -147,12 +136,7 @@ class LethalState final {
     GameClassFailureReporter mGameClassFailureReporter;
     Classes mClasses{};
     mono::MonoObject* mLocalPlayer = nullptr;
-    bool mHudHookInstallTried = false;
-    std::atomic<bool> mHudInstallAttempted{false};
-    bool mLateHudHookInstalled = false;
-    int mLateHudHookAttempts = 0;
     std::uint8_t mStatusWaits = 0;
-    std::chrono::steady_clock::time_point mHudHookArmedAt;
     std::chrono::steady_clock::time_point mLastPlayerRecheck;
 };
 

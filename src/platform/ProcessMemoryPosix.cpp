@@ -1,11 +1,9 @@
 #include "platform/ProcessMemory.h"
 
-#include <bit>
 #include <cerrno>
 #include <charconv>
 #include <cstring>
 #include <fcntl.h>
-#include <sys/syscall.h>
 #include <unistd.h>
 
 namespace kue::platform {
@@ -127,36 +125,6 @@ bool MemoryRegionScan::next(MemoryRegion& region) noexcept {
             return true;
     }
     return false;
-}
-
-std::size_t pageSize() noexcept {
-    const long size = ::sysconf(_SC_PAGESIZE);
-    return size > 0 ? static_cast<std::size_t>(size) : 4096;
-}
-
-void* reserveNear(std::uintptr_t address, std::size_t bytes) noexcept {
-#if defined(MAP_FIXED_NOREPLACE)
-    void* const mapping = ::mmap(std::bit_cast<void*>(address), bytes, PROT_READ | PROT_WRITE,
-                                 MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE, -1, 0);
-    return mapping == MAP_FAILED ? nullptr : mapping;
-#else
-    static_cast<void>(address);
-    static_cast<void>(bytes);
-    return nullptr;
-#endif
-}
-
-void releaseReservation(void* address, std::size_t bytes) noexcept {
-    static_cast<void>(::munmap(address, bytes));
-}
-
-bool setProtection(void* address, std::size_t bytes, PageProtection protection) noexcept {
-    return ::syscall(SYS_mprotect, address, bytes, protection) == 0;
-}
-
-void flushInstructionCache(void* address, std::size_t bytes) noexcept {
-    char* const begin = static_cast<char*>(address);
-    __builtin___clear_cache(begin, begin + bytes);
 }
 
 }

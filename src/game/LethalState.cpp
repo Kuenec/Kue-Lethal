@@ -187,8 +187,8 @@ MetadataFailureReporter::MetadataFailureRecordResult
 MetadataFailureReporter::record(const MetadataFailure& failure) noexcept {
     for (std::uint8_t index = 0; index < mFailureCount; ++index) {
         const MetadataFailure& recorded = mFailures[static_cast<std::size_t>(index)];
-        if (recorded.kind == failure.kind && recorded.type == failure.type &&
-            recorded.name == failure.name && recorded.status == failure.status) {
+        if (recorded.type == failure.type && recorded.name == failure.name &&
+            recorded.status == failure.status) {
             return MetadataFailureRecordResult::Duplicate;
         }
     }
@@ -199,34 +199,23 @@ MetadataFailureReporter::record(const MetadataFailure& failure) noexcept {
     return MetadataFailureRecordResult::Recorded;
 }
 
-void MetadataFailureReporter::report(MetadataMemberKind kind, const MonoClass* type,
-                                     const char* name, unity::MetadataLookupStatus status) {
+void MetadataFailureReporter::report(const MonoClass* type, const char* name,
+                                     unity::MetadataLookupStatus status) {
     if (status == unity::MetadataLookupStatus::Resolved)
         return;
-    const char* kindName = nullptr;
-    switch (kind) {
-    case MetadataMemberKind::Field:
-        kindName = "field";
-        break;
-    case MetadataMemberKind::Method:
-        kindName = "method";
-        break;
-    }
-    const MetadataFailure failure{.type = type,
-                                  .name = name ? std::string_view{name} : std::string_view{},
-                                  .status = status,
-                                  .kind = kind};
+    const MetadataFailure failure{
+        .type = type, .name = name ? std::string_view{name} : std::string_view{}, .status = status};
     switch (record(failure)) {
     case MetadataFailureRecordResult::Duplicate:
         return;
     case MetadataFailureRecordResult::CapacityExceeded:
-        KUE_ERR("lethal: %s metadata lookup failed type=%p name=%s status=%s "
+        KUE_ERR("lethal: field metadata lookup failed type=%p name=%s status=%s "
                 "diagnostic-ledger-capacity=%zu",
-                kindName, static_cast<const void*>(type), name ? name : "<null>",
+                static_cast<const void*>(type), name ? name : "<null>",
                 unity::metadataLookupStatusName(status), mFailures.size());
         return;
     case MetadataFailureRecordResult::Recorded:
-        KUE_ERR("lethal: %s metadata lookup failed type=%p name=%s status=%s", kindName,
+        KUE_ERR("lethal: field metadata lookup failed type=%p name=%s status=%s",
                 static_cast<const void*>(type), name ? name : "<null>",
                 unity::metadataLookupStatusName(status));
         return;
@@ -259,9 +248,6 @@ void GameClassFailureReporter::report(GameClassKind kind, mono::ClassLookupStatu
     case GameClassKind::Round:
         className = "StartOfRound";
         break;
-    case GameClassKind::Menu:
-        className = "MenuManager";
-        break;
     }
 
     if (static_cast<std::size_t>(mFailureCount) == mFailures.size()) {
@@ -282,15 +268,7 @@ MonoClassField* LethalState::requiredField(const MonoClass* type, const char* na
                                            unity::MetadataLookupResult<MonoClassField> result) {
     if (result.status == unity::MetadataLookupStatus::Resolved)
         return result.member;
-    mMetadataFailureReporter.report(MetadataMemberKind::Field, type, name, result.status);
-    return nullptr;
-}
-
-MonoMethod* LethalState::requiredMethod(const MonoClass* type, const char* name,
-                                        unity::MetadataLookupResult<MonoMethod> result) {
-    if (result.status == unity::MetadataLookupStatus::Resolved)
-        return result.member;
-    mMetadataFailureReporter.report(MetadataMemberKind::Method, type, name, result.status);
+    mMetadataFailureReporter.report(type, name, result.status);
     return nullptr;
 }
 
@@ -507,37 +485,25 @@ bool LethalState::gatherPlayers(PlayerSnapshotTransaction& transaction) {
     return true;
 }
 
-void LethalState::mainThreadInstallThunk(void* context) {
-    if (context)
-        static_cast<LethalState*>(context)->installHudOnMainThread();
-}
-
-void LethalState::installHudOnMainThread() {
-    if (mHudInstallAttempted.exchange(true))
-        return;
-
+void LethalState::armHud() {
     const std::string hudPath = internalHudPath();
-    MonoMethod* install = nullptr;
+    MonoMethod* arm = nullptr;
     if (internalhud::registerManagedBridge()) {
-        install = mono::loadManagedMethod({.assemblyPath = hudPath.c_str(),
-                                           .namespaceName = "Kue.Internal",
-                                           .className = "HudBootstrap",
-                                           .methodName = "Install",
-                                           .parameterCount = 0});
+        arm = mono::loadManagedMethod({.assemblyPath = hudPath.c_str(),
+                                       .namespaceName = "Kue.Internal",
+                                       .className = "HudBootstrap",
+                                       .methodName = "Arm",
+                                       .parameterCount = 0});
     }
-    if (!install) {
+    if (!arm) {
         KUE_ERR("lethal: internal Unity HUD unavailable at %s", hudPath.c_str());
-        mono::clearManagedMethodCallback();
         return;
     }
-
-    const mono::StaticInvocationResult invocation = mono::invokeStatic(install);
-    if (invocation.status != mono::StaticInvocationStatus::Succeeded) {
-        KUE_ERR("lethal: internal Unity HUD Install threw an exception");
-    } else {
-        KUE_INFO("lethal: internal Unity HUD installed");
+    if (mono::invokeStatic(arm).status != mono::StaticInvocationStatus::Succeeded) {
+        KUE_ERR("lethal: internal Unity HUD Arm threw an exception");
+        return;
     }
-    mono::clearManagedMethodCallback();
+    KUE_INFO("lethal: HUD armed on the render loop");
 }
 
 void LethalState::run() {
@@ -568,8 +534,6 @@ void LethalState::run() {
                                  {.namespaceName = "", .className = "GameNetworkManager"}));
             static_cast<void>(resolveGameClass(GameClassKind::Round, mClasses.round,
                                                {.namespaceName = "", .className = "StartOfRound"}));
-            static_cast<void>(resolveGameClass(GameClassKind::Menu, mClasses.menu,
-                                               {.namespaceName = "", .className = "MenuManager"}));
             if (!player) {
                 mStatus.store(unity::gameClassLookupMayRetry(mClasses.player.status)
                                   ? "waiting for Assembly-CSharp"
@@ -578,50 +542,8 @@ void LethalState::run() {
                 continue;
             }
             KUE_INFO("lethal: runtime classes resolved");
-            if (!mHudHookInstallTried) {
-                mHudHookInstallTried = true;
-                MonoMethod* update =
-                    requiredMethod(player, "Update", unity::cachedMethod(player, "Update", 0));
-                if (update && mono::installManagedMethodCallback(
-                                  update, &LethalState::mainThreadInstallThunk, this)) {
-                    KUE_INFO("lethal: main-thread HUD installer armed");
-                    mHudHookArmedAt = std::chrono::steady_clock::now();
-                } else {
-                    KUE_WARN("lethal: profiler HUD installer unavailable");
-                }
-            }
+            armHud();
             mStatus.store("waiting for local player");
-        }
-
-        if (!mHudInstallAttempted.load() && !mLateHudHookInstalled &&
-            mHudHookArmedAt != std::chrono::steady_clock::time_point{} &&
-            std::chrono::steady_clock::now() - mHudHookArmedAt >= std::chrono::seconds(2) &&
-            mLateHudHookAttempts < 5) {
-            ++mLateHudHookAttempts;
-            KUE_INFO("lethal: late HUD installer attempt %d/5", mLateHudHookAttempts);
-            MonoMethod* update =
-                requiredMethod(mClasses.player.type, "Update",
-                               unity::cachedMethod(mClasses.player.type, "Update", 0));
-            MonoMethod* menuUpdate = nullptr;
-            MonoClass* const menu =
-                resolveGameClass(GameClassKind::Menu, mClasses.menu,
-                                 {.namespaceName = "", .className = "MenuManager"});
-            if (menu) {
-                menuUpdate = requiredMethod(menu, "Update", unity::cachedMethod(menu, "Update", 0));
-            }
-            bool installed = update && mono::installCompiledMethodCallback(
-                                           update, &LethalState::mainThreadInstallThunk, this);
-            if (!installed && menuUpdate) {
-                KUE_INFO("lethal: trying title-menu HUD installer");
-                installed = mono::installCompiledMethodCallback(
-                    menuUpdate, &LethalState::mainThreadInstallThunk, this);
-            }
-            if (installed) {
-                mLateHudHookInstalled = true;
-                KUE_INFO("lethal: late HUD installer active");
-            } else {
-                mHudHookArmedAt = std::chrono::steady_clock::now();
-            }
         }
 
         const bool gotFrame = poll();

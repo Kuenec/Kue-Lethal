@@ -300,16 +300,6 @@ void detachCurrentThread() {
         throw std::runtime_error("fixture detach failure");
 }
 
-bool installManagedMethodCallback(MonoMethod*, MainThreadCallback, void*) {
-    return false;
-}
-
-bool installCompiledMethodCallback(MonoMethod*, MainThreadCallback, void*) {
-    return false;
-}
-
-void clearManagedMethodCallback() {}
-
 MonoMethod* loadManagedMethod(ManagedMethodLocation) {
     return nullptr;
 }
@@ -319,10 +309,6 @@ StaticInvocationResult invokeStatic(MonoMethod*) noexcept {
 }
 
 FieldLookupResult findField(const MonoClass*, const char*) noexcept {
-    return {};
-}
-
-MethodLookupResult findMethod(const MonoClass*, const char*, int) noexcept {
     return {};
 }
 
@@ -419,10 +405,6 @@ const char* gameClassLookupStatusName(mono::ClassLookupStatus status) noexcept {
     return "invalid class lookup status";
 }
 
-MetadataLookupResult<mono::MonoMethod> cachedMethod(const mono::MonoClass*, const char*, int) {
-    return {};
-}
-
 MetadataLookupResult<mono::MonoClassField> cachedField(const mono::MonoClass*, const char*) {
     return {};
 }
@@ -448,7 +430,7 @@ namespace {
 void testGameClassFailureReporter(TestRun& run) {
     using kue::GameClassKind;
     using kue::mono::ClassLookupStatus;
-    static_assert(kue::GameClassFailureReporter::kCapacity == 20);
+    static_assert(kue::GameClassFailureReporter::kCapacity == 15);
     static_assert(sizeof(kue::GameClassFailureReporter) <= 64);
     static_assert(!std::is_polymorphic_v<kue::GameClassFailureReporter>);
     static_assert(std::is_trivially_destructible_v<kue::GameClassFailureReporter>);
@@ -480,7 +462,7 @@ void testGameClassFailureReporter(TestRun& run) {
     const std::size_t freshLogCount = gErrorLogCount.load(std::memory_order_relaxed);
 
     constexpr std::array kinds = {GameClassKind::Player, GameClassKind::Network,
-                                  GameClassKind::Round, GameClassKind::Menu};
+                                  GameClassKind::Round};
     constexpr std::array failureStatuses = {
         ClassLookupStatus::InvalidLocation, ClassLookupStatus::RuntimeUnavailable,
         ClassLookupStatus::DomainUnavailable, ClassLookupStatus::ImageUnavailable,
@@ -491,7 +473,7 @@ void testGameClassFailureReporter(TestRun& run) {
             fullSession.report(kind, status);
     }
     const std::size_t fullLogCount = gErrorLogCount.load(std::memory_order_relaxed);
-    fullSession.report(GameClassKind::Menu, ClassLookupStatus::ClassUnavailable);
+    fullSession.report(GameClassKind::Round, ClassLookupStatus::ClassUnavailable);
     const std::size_t duplicateAfterFullCount = gErrorLogCount.load(std::memory_order_relaxed);
 
     run.expect(distinctLogCount == 4,
@@ -518,7 +500,7 @@ void testGameClassFailureReporter(TestRun& run) {
 }
 
 void testMetadataFailureReporter(TestRun& run) {
-    static_assert(kue::MetadataFailureReporter::kCapacity == 21);
+    static_assert(kue::MetadataFailureReporter::kCapacity == 19);
     static_assert(sizeof(kue::MetadataFailureReporter) <= 1024);
     static_assert(!std::is_polymorphic_v<kue::MetadataFailureReporter>);
     static_assert(std::is_trivially_destructible_v<kue::MetadataFailureReporter>);
@@ -532,60 +514,49 @@ void testMetadataFailureReporter(TestRun& run) {
     gErrorLogCount = 0;
     for (auto& record : gErrorLogs)
         record.fill('\0');
-    firstSession.report(kue::MetadataMemberKind::Method, typeAt(0), "Update",
-                        kue::unity::MetadataLookupStatus::RuntimeUnavailable);
-    firstSession.report(kue::MetadataMemberKind::Field, typeAt(0), "health",
-                        kue::unity::MetadataLookupStatus::RuntimeUnavailable);
-    firstSession.report(kue::MetadataMemberKind::Field, typeAt(0), "health",
-                        kue::unity::MetadataLookupStatus::RuntimeUnavailable);
-    firstSession.report(kue::MetadataMemberKind::Field, typeAt(0), "health",
-                        kue::unity::MetadataLookupStatus::MissingMember);
+    firstSession.report(typeAt(0), "armor", kue::unity::MetadataLookupStatus::RuntimeUnavailable);
+    firstSession.report(typeAt(0), "health", kue::unity::MetadataLookupStatus::RuntimeUnavailable);
+    firstSession.report(typeAt(0), "health", kue::unity::MetadataLookupStatus::RuntimeUnavailable);
+    firstSession.report(typeAt(0), "health", kue::unity::MetadataLookupStatus::MissingMember);
     const std::size_t distinctLogCount = gErrorLogCount.load(std::memory_order_relaxed);
-    const std::array<char, 256> methodLog = gErrorLogs[0];
-    const std::array<char, 256> fieldLog = gErrorLogs[1];
+    const std::array<char, 256> fieldLog = gErrorLogs[0];
 
     gErrorLogCount.store(0, std::memory_order_relaxed);
     firstSession.reset();
-    firstSession.report(kue::MetadataMemberKind::Method, typeAt(0), "Update",
-                        kue::unity::MetadataLookupStatus::RuntimeUnavailable);
+    firstSession.report(typeAt(0), "armor", kue::unity::MetadataLookupStatus::RuntimeUnavailable);
     const std::size_t resetSessionLogCount = gErrorLogCount.load(std::memory_order_relaxed);
 
     gErrorLogCount.store(0, std::memory_order_relaxed);
-    freshSession.report(kue::MetadataMemberKind::Method, typeAt(0), "Update",
-                        kue::unity::MetadataLookupStatus::RuntimeUnavailable);
+    freshSession.report(typeAt(0), "armor", kue::unity::MetadataLookupStatus::RuntimeUnavailable);
     const std::size_t freshSessionLogCount = gErrorLogCount.load(std::memory_order_relaxed);
 
     gErrorLogCount.store(0, std::memory_order_relaxed);
     for (std::size_t index = 0; index < kue::MetadataFailureReporter::kCapacity; ++index) {
-        fullSession.report(kue::MetadataMemberKind::Field, typeAt(index), "health",
+        fullSession.report(typeAt(index), "health",
                            kue::unity::MetadataLookupStatus::MissingMember);
     }
-    fullSession.report(kue::MetadataMemberKind::Field,
-                       typeAt(kue::MetadataFailureReporter::kCapacity), "health",
+    fullSession.report(typeAt(kue::MetadataFailureReporter::kCapacity), "health",
                        kue::unity::MetadataLookupStatus::MissingMember);
     const std::size_t capacityLogCount = gErrorLogCount.load(std::memory_order_relaxed);
     const std::array<char, 256> capacityLog = gLastLog;
-    fullSession.report(kue::MetadataMemberKind::Field, typeAt(0), "health",
-                       kue::unity::MetadataLookupStatus::MissingMember);
+    fullSession.report(typeAt(0), "health", kue::unity::MetadataLookupStatus::MissingMember);
     const std::size_t duplicateAfterCapacityLogCount =
         gErrorLogCount.load(std::memory_order_relaxed);
 
     run.expect(distinctLogCount == 3,
                "distinct same-status requirements and distinct statuses are visible while an "
                "exact repeat is deduplicated");
-    run.expect(std::string_view(methodLog.data()).find("method metadata lookup failed") !=
-                   std::string_view::npos,
-               "the typed method failure is preserved");
     run.expect(std::string_view(fieldLog.data()).find("field metadata lookup failed") !=
-                   std::string_view::npos,
-               "the typed field failure is preserved");
+                       std::string_view::npos &&
+                   std::string_view(fieldLog.data()).find("name=armor") != std::string_view::npos,
+               "the field failure keeps its member name");
     run.expect(resetSessionLogCount == 1,
                "reset begins a new diagnostic session without retained suppression");
     run.expect(freshSessionLogCount == 1,
                "a fresh session does not inherit another session's diagnostic ledger");
     run.expect(capacityLogCount == kue::MetadataFailureReporter::kCapacity + 1,
                "every reachable ledger entry and an exhaustion diagnostic remain visible");
-    run.expect(std::string_view(capacityLog.data()).find("diagnostic-ledger-capacity=21") !=
+    run.expect(std::string_view(capacityLog.data()).find("diagnostic-ledger-capacity=19") !=
                    std::string_view::npos,
                "ledger exhaustion reports its exact capacity");
     run.expect(duplicateAfterCapacityLogCount == capacityLogCount,

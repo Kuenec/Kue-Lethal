@@ -22,11 +22,10 @@ Enemy, item, trap, and moon lists are read from the installed game assets at run
 
 Builds happen on Linux x86-64 for both targets.
 
-- GCC or Clang with C++20 support, CMake 3.24 or newer, pkg-config
-- Capstone 5, Wine, and Wine Mono (the managed HUD is compiled with Wine Mono's C# compiler)
+- GCC or Clang with C++20 support, CMake 3.24 or newer
+- Wine and Wine Mono (the managed HUD is compiled with Wine Mono's C# compiler)
 - Lethal Company installed through Steam; the build reads its managed assemblies
-- For the Windows target: the MinGW-w64 x86-64 toolchain (`x86_64-w64-mingw32-g++`)
-- For attaching on Linux: gdb
+- For the Windows target, which is also what loads into the game on Linux: the MinGW-w64 x86-64 toolchain (`x86_64-w64-mingw32-g++`)
 
 The build finds the game under the usual native and Flatpak Steam paths and in any library listed in `libraryfolders.vdf`. If it can't, set `KUE_GAME_MANAGED_DIR` to the game's `Lethal Company_Data/Managed` directory. `KUE_CSC` pins a specific Wine Mono `csc.exe`, and `KUE_STEAM_COMMON` overrides the Steam library root.
 
@@ -59,8 +58,6 @@ cmake -S . -B build \
 cmake --build build --parallel
 ```
 
-Add `-DKUE_CAPSTONE_SOURCE_DIR=/path/to/capstone-5.0.9` for an offline Windows build.
-
 Project sources compile with warnings treated as errors. To build and run only the dependency-free native tests:
 
 ```bash
@@ -81,13 +78,13 @@ Start Lethal Company first, then load the module.
 scripts/inject.sh
 ```
 
-The script attaches with gdb, writes `KUE_CONFIG` and `KUE_LOG` into the game process, loads the module, calls its start entry, detaches, and then confirms through the log that the exact build it loaded came up. It refuses to load a second copy into the same process. Attaching needs ptrace permission; if that is prohibited on your system there is currently no other loader.
+The game runs on Linux through Proton, so the script loads the Windows build into it. It reads the game process's Wine prefix and Proton install, builds the Windows target first if `build-windows` is missing, and runs `kue-inject.exe` with that same Wine, which then works exactly as it does on Windows. The game must not run inside the Steam Linux Runtime container. `KUE_INJECTOR` overrides the injector path and `KUE_MODULE` the Windows module path.
 
 **Windows**
 
-Run `kue-inject.exe` from the `build-windows` directory (double-clicking it is fine). It finds the `Lethal Company.exe` process, loads `kuelethal.dll`, hands over the configuration and log paths, and confirms the build identity and HUD delivery through the log, the same way the Linux script does. A failed start restores the game's environment and unloads the module.
+Run `kue-inject.exe` from the `build-windows` directory (double-clicking it is fine). It finds the `Lethal Company.exe` process, loads `kuelethal.dll`, hands over the configuration and log paths, and confirms the build identity and HUD delivery through the log. A failed start restores the game's environment and unloads the module.
 
-Both loaders honor the same overrides: `KUE_MODULE`, `KUE_CONFIG`, `KUE_LOG`, and `GAME_PATTERN` (a process pattern on Linux, an exact executable name on Windows). Default log locations are `${XDG_STATE_HOME:-$HOME/.local/state}/kuelethal/kuelethal.log` on Linux and `%LOCALAPPDATA%\kuelethal\kuelethal.log` on Windows. Set `KUE_CONSOLE=1` to mirror runtime logs to the process console.
+Both loaders honor the same overrides: `KUE_MODULE`, `KUE_CONFIG`, `KUE_LOG`, and `GAME_PATTERN` (the game's executable name). Default log locations are `${XDG_STATE_HOME:-$HOME/.local/state}/kuelethal/kuelethal.log` on Linux and `%LOCALAPPDATA%\kuelethal\kuelethal.log` on Windows. Set `KUE_CONSOLE=1` to mirror runtime logs to the process console.
 
 `scripts/run.sh` only validates and exports the module, configuration, and log paths; the module never starts from merely being mapped, so a plain `LD_PRELOAD` does not start the HUD.
 

@@ -60,11 +60,6 @@ struct FieldLookupResult final {
     MetadataMemberLookupStatus status = MetadataMemberLookupStatus::RuntimeUnavailable;
 };
 
-struct MethodLookupResult final {
-    MonoMethod* method = nullptr;
-    MetadataMemberLookupStatus status = MetadataMemberLookupStatus::RuntimeUnavailable;
-};
-
 enum class RuntimeArrayAccessStatus : std::uint8_t {
     Success,
     NullArray,
@@ -133,47 +128,12 @@ struct StaticInvocationResult final {
 [[nodiscard]] bool ready() noexcept;
 void detachCurrentThread();
 
-inline constexpr std::size_t kCompiledPatchBytes = 8;
-inline constexpr std::size_t kAbsoluteJumpBytes = 14;
-
-struct PrologueRelocationRequest final {
-    const std::uint8_t* code;
-    std::size_t codeSize;
-    std::uint8_t* trampoline;
-    std::size_t trampolineCapacity;
-};
-
-enum class PrologueRelocationStatus : std::uint8_t {
-    Relocated,
-    DisassemblerUnavailable,
-    TooShort,
-    UnsupportedInstruction,
-    TrampolineTooSmall
-};
-
-struct PrologueRelocation final {
-    PrologueRelocationStatus status = PrologueRelocationStatus::DisassemblerUnavailable;
-    std::size_t patchedBytes = 0;
-    std::size_t trampolineBytes = 0;
-};
-
-[[nodiscard]] PrologueRelocation relocatePrologue(PrologueRelocationRequest request) noexcept;
-
-using MainThreadCallback = void (*)(void* context);
-[[nodiscard]] bool installManagedMethodCallback(MonoMethod* method, MainThreadCallback callback,
-                                                void* context);
-[[nodiscard]] bool installCompiledMethodCallback(MonoMethod* method, MainThreadCallback callback,
-                                                 void* context);
-void clearManagedMethodCallback();
-
 [[nodiscard]] MonoMethod* loadManagedMethod(ManagedMethodLocation location);
 [[nodiscard]] StaticInvocationResult invokeStatic(MonoMethod* method) noexcept;
 [[nodiscard]] bool addInternalCall(const char* managedMethod, const void* nativeFunction);
 
 [[nodiscard]] ClassLookupResult findClass(ManagedClassLocation location) noexcept;
 [[nodiscard]] FieldLookupResult findField(const MonoClass* type, const char* name) noexcept;
-[[nodiscard]] MethodLookupResult findMethod(const MonoClass* type, const char* name,
-                                            int parameterCount) noexcept;
 [[nodiscard]] bool readStaticObject(MonoClass* type, const MonoClassField* field,
                                     MonoObject*& output);
 [[nodiscard]] bool readInstanceObject(MonoObject* object, const MonoClassField* field,

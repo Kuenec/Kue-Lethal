@@ -833,66 +833,8 @@ PublicationProbeResult runConcurrentPublicationProbe() {
 
 }
 
-void testPrologueRelocation(TestRun& run) {
-    constexpr std::uint64_t detourDestination = 0x0000000139299abcULL;
-    alignas(8) std::array<std::uint8_t, 64> detoured{};
-    detoured.fill(0xCC);
-    const std::array<std::uint8_t, 6> indirectJump = {0xFF, 0x25, 0x00, 0x00, 0x00, 0x00};
-    std::memcpy(detoured.data(), indirectJump.data(), indirectJump.size());
-    std::memcpy(detoured.data() + indirectJump.size(), &detourDestination,
-                sizeof(detourDestination));
-    std::array<std::uint8_t, 128> trampoline{};
-    const kue::mono::PrologueRelocation detour =
-        kue::mono::relocatePrologue({.code = detoured.data(),
-                                     .codeSize = detoured.size(),
-                                     .trampoline = trampoline.data(),
-                                     .trampolineCapacity = trampoline.size()});
-    run.expect(detour.status == kue::mono::PrologueRelocationStatus::Relocated,
-               "a method already detoured through an indirect jump is relocated");
-    std::memset(detoured.data(), 0x90, kue::mono::kCompiledPatchBytes);
-    std::uint64_t trampolineDestination = 0;
-    std::memcpy(&trampolineDestination, trampoline.data() + indirectJump.size(),
-                sizeof(trampolineDestination));
-    run.expect(std::memcmp(trampoline.data(), indirectJump.data(), indirectJump.size()) == 0 &&
-                   trampolineDestination == detourDestination &&
-                   detour.trampolineBytes == kue::mono::kAbsoluteJumpBytes,
-               "an existing detour keeps its destination after the patch overwrites the method");
-
-    alignas(8) std::array<std::uint8_t, 64> prologue{};
-    prologue.fill(0xCC);
-    const std::array<std::uint8_t, 8> frameSetup = {0x55, 0x48, 0x8B, 0xEC, 0x48, 0x83, 0xEC, 0x40};
-    std::memcpy(prologue.data(), frameSetup.data(), frameSetup.size());
-    trampoline.fill(0);
-    const kue::mono::PrologueRelocation frame =
-        kue::mono::relocatePrologue({.code = prologue.data(),
-                                     .codeSize = prologue.size(),
-                                     .trampoline = trampoline.data(),
-                                     .trampolineCapacity = trampoline.size()});
-    std::uint64_t resume = 0;
-    std::memcpy(&resume, trampoline.data() + frameSetup.size() + indirectJump.size(),
-                sizeof(resume));
-    run.expect(frame.status == kue::mono::PrologueRelocationStatus::Relocated &&
-                   frame.patchedBytes == frameSetup.size() &&
-                   std::memcmp(trampoline.data(), frameSetup.data(), frameSetup.size()) == 0 &&
-                   resume == reinterpret_cast<std::uintptr_t>(prologue.data()) + frameSetup.size(),
-               "an ordinary prologue is copied and resumes after the patched bytes");
-
-    alignas(8) std::array<std::uint8_t, 64> selfRead{};
-    selfRead.fill(0xCC);
-    const std::array<std::uint8_t, 8> loadFromPatch = {0x48, 0x8B, 0x05, 0x00,
-                                                       0x00, 0x00, 0x00, 0x90};
-    std::memcpy(selfRead.data(), loadFromPatch.data(), loadFromPatch.size());
-    run.expect(kue::mono::relocatePrologue({.code = selfRead.data(),
-                                            .codeSize = selfRead.size(),
-                                            .trampoline = trampoline.data(),
-                                            .trampolineCapacity = trampoline.size()})
-                       .status == kue::mono::PrologueRelocationStatus::UnsupportedInstruction,
-               "a prologue that reads bytes the patch overwrites is refused");
-}
-
 int main() {
     TestRun run;
-    testPrologueRelocation(run);
     const auto* array = reinterpret_cast<const kue::mono::MonoArray*>(&gMonoArray);
     kue::mono::ReferenceArrayView unavailableArray(array);
     run.expect(unavailableArray.status() == kue::mono::RuntimeArrayAccessStatus::RuntimeUnavailable,
@@ -929,10 +871,6 @@ int main() {
     run.expect(kue::mono::findField(nullptr, "health").status ==
                    kue::mono::MetadataMemberLookupStatus::InvalidInput,
                "a null declaring class never reaches Mono field lookup");
-    run.expect(kue::mono::findMethod(reinterpret_cast<kue::mono::MonoClass*>(&gMonoClassStorage),
-                                     "Update", -1)
-                       .status == kue::mono::MetadataMemberLookupStatus::InvalidInput,
-               "a negative parameter count never reaches Mono method lookup");
 
     kue::mono::ReferenceArrayView nullArray(nullptr);
     run.expect(nullArray.status() == kue::mono::RuntimeArrayAccessStatus::NullArray,

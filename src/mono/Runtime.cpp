@@ -2,19 +2,14 @@
 
 #include "core/Log.h"
 #include "mono/PeExport.h"
-#include "platform/ProcessMemory.h"
 
 #include <algorithm>
 #include <array>
 #include <atomic>
-#include <bit>
-#include <capstone/capstone.h>
-#include <chrono>
 #include <cstring>
 #include <limits>
 #include <mutex>
 #include <string>
-#include <thread>
 
 namespace kue::mono {
 
@@ -54,46 +49,7 @@ bool runtimeResolved() noexcept {
 
 #define MSABI __attribute__((ms_abi))
 
-struct MonoProfiler;
-struct MonoProfilerCallContext;
-struct MonoProfilerDesc;
-
-using MonoProfilerHandle = MonoProfilerDesc*;
-
-enum class MonoProfilerCallInstrumentationFlags : int {
-    None = 0,
-    Enter = 1U << 1,
-};
-
-using ProfilerCreateFn = MonoProfilerHandle(MSABI*)(MonoProfiler* profiler);
-using ProfilerEnterCallback = void(MSABI*)(MonoProfiler* profiler, MonoMethod* method,
-                                           MonoProfilerCallContext* context);
-using ProfilerFilterCallback = MonoProfilerCallInstrumentationFlags(MSABI*)(MonoProfiler* profiler,
-                                                                            MonoMethod* method);
-using ProfilerSetEnterFn = void(MSABI*)(MonoProfilerHandle handle, ProfilerEnterCallback callback);
-using ProfilerSetFilterFn = void(MSABI*)(MonoProfilerHandle handle,
-                                         ProfilerFilterCallback callback);
 using MonoThreadDetachFn = void(MSABI*)(void* thread);
-
-struct CallbackBinding {
-    MonoMethod* method = nullptr;
-    MainThreadCallback callback = nullptr;
-    void* context = nullptr;
-    void* compiledTrampoline = nullptr;
-};
-
-struct CallbackBindingRequest {
-    MonoMethod* method;
-    MainThreadCallback callback;
-    void* context;
-    void* compiledTrampoline;
-};
-
-struct MemoryProtectionRequest {
-    void* address;
-    std::size_t length;
-    platform::PageProtection protection;
-};
 
 enum class EmptyTextPolicy : std::uint8_t { Allowed, Rejected };
 
@@ -103,113 +59,8 @@ struct ClassLocationTextRequirement {
     EmptyTextPolicy emptyText;
 };
 
-constexpr std::size_t kCallbackBindingCapacity = 3;
-constexpr std::int64_t kManagedCallbackIntervalNs = 500000000;
-
-std::array<CallbackBinding, kCallbackBindingCapacity> gCallbackBindings{};
-std::size_t gCallbackBindingCount = 0;
-std::mutex gCallbackInstallMutex;
-std::atomic<const CallbackBinding*> gManagedCallbackBinding{nullptr};
-std::atomic<const CallbackBinding*> gCompiledMethodBinding{nullptr};
-std::atomic<std::uint64_t> gManagedCallbackClearRevision{0};
-std::atomic<bool> gManagedCallbackBusy{false};
-std::atomic<std::int64_t> gManagedCallbackLastNs{0};
-thread_local bool gDispatchingManagedCallback = false;
 thread_local void* gCurrentMonoThread = nullptr;
 thread_local MonoThreadDetachFn gCurrentMonoThreadDetach = nullptr;
-
-const CallbackBinding* createCallbackBinding(CallbackBindingRequest request) {
-    if (gCallbackBindingCount >= gCallbackBindings.size()) {
-        KUE_ERR("mono: callback binding capacity exhausted");
-        return nullptr;
-    }
-    CallbackBinding& binding = gCallbackBindings[gCallbackBindingCount];
-    binding = {.method = request.method,
-               .callback = request.callback,
-               .context = request.context,
-               .compiledTrampoline = request.compiledTrampoline};
-    ++gCallbackBindingCount;
-    return &binding;
-}
-
-void deactivateManagedCallback() {
-    gManagedCallbackClearRevision.fetch_add(1, std::memory_order_acq_rel);
-    gManagedCallbackBinding.exchange(nullptr, std::memory_order_acq_rel);
-    if (gDispatchingManagedCallback)
-        return;
-    while (gManagedCallbackBusy.load(std::memory_order_acquire))
-        std::this_thread::yield();
-}
-
-bool publishManagedCallback(const CallbackBinding* binding, std::uint64_t clearRevision) {
-    const CallbackBinding* expected = nullptr;
-    if (!gManagedCallbackBinding.compare_exchange_strong(
-            expected, binding, std::memory_order_release, std::memory_order_acquire)) {
-        return expected == binding;
-    }
-    if (gManagedCallbackClearRevision.load(std::memory_order_acquire) == clearRevision)
-        return true;
-    expected = binding;
-    gManagedCallbackBinding.compare_exchange_strong(expected, nullptr, std::memory_order_acq_rel,
-                                                    std::memory_order_acquire);
-    return false;
-}
-
-bool setMemoryProtection(MemoryProtectionRequest request) {
-    return platform::setProtection(request.address, request.length, request.protection);
-}
-
-void dispatchManagedCallback(const CallbackBinding* expectedBinding) {
-    const CallbackBinding* binding = gManagedCallbackBinding.load(std::memory_order_acquire);
-    if (!binding || (expectedBinding && binding != expectedBinding))
-        return;
-    const auto now = std::chrono::steady_clock::now().time_since_epoch();
-    const auto ns = std::chrono::duration_cast<std::chrono::nanoseconds>(now).count();
-    const auto last = gManagedCallbackLastNs.load(std::memory_order_relaxed);
-    if (ns - last < kManagedCallbackIntervalNs)
-        return;
-    if (gManagedCallbackBusy.exchange(true, std::memory_order_acq_rel))
-        return;
-
-    struct DispatchCompletion {
-        ~DispatchCompletion() {
-            gDispatchingManagedCallback = false;
-            gManagedCallbackBusy.store(false, std::memory_order_release);
-        }
-    } completion;
-
-    binding = gManagedCallbackBinding.load(std::memory_order_acquire);
-    if (!binding || (expectedBinding && binding != expectedBinding))
-        return;
-    gManagedCallbackLastNs.store(ns, std::memory_order_relaxed);
-    gDispatchingManagedCallback = true;
-    binding->callback(binding->context);
-}
-
-MonoProfilerCallInstrumentationFlags MSABI profilerFilter(MonoProfiler*, MonoMethod* method) {
-    const CallbackBinding* binding = gManagedCallbackBinding.load(std::memory_order_acquire);
-    return binding && method == binding->method ? MonoProfilerCallInstrumentationFlags::Enter
-                                                : MonoProfilerCallInstrumentationFlags::None;
-}
-
-void MSABI profilerEnter(MonoProfiler*, MonoMethod* method, MonoProfilerCallContext*) {
-    const CallbackBinding* binding = gManagedCallbackBinding.load(std::memory_order_acquire);
-    if (!binding || method != binding->method)
-        return;
-    dispatchManagedCallback(binding);
-}
-
-using CompiledUpdateFn = void(MSABI*)(void* instance);
-
-void MSABI compiledUpdateDetour(void* instance) {
-    const CallbackBinding* binding = gCompiledMethodBinding.load(std::memory_order_acquire);
-    auto original =
-        binding ? reinterpret_cast<CompiledUpdateFn>(binding->compiledTrampoline) : nullptr;
-    if (original)
-        original(instance);
-    if (binding)
-        dispatchManagedCallback(nullptr);
-}
 
 struct MonoRaw {
     void*(MSABI* get_root_domain)() = nullptr;
@@ -235,10 +86,6 @@ struct MonoRaw {
     void*(MSABI* thread_current)() = nullptr;
     std::uint16_t*(MSABI* string_chars)(void* stringObject) = nullptr;
     int(MSABI* string_length)(void* stringObject) = nullptr;
-    void*(MSABI* jit_info_table_find)(void* domain, void* address) = nullptr;
-    void*(MSABI* jit_info_get_method)(void* jitInfo) = nullptr;
-    void*(MSABI* jit_info_get_code_start)(void* jitInfo) = nullptr;
-    int(MSABI* jit_info_get_code_size)(void* jitInfo) = nullptr;
 };
 
 enum class RequiredMonoSymbol : std::uint8_t {
@@ -361,14 +208,6 @@ bool resolveMono(RuntimeResolveError& error) {
 
 #undef BIND_M
 
-    m.jit_info_table_find = reinterpret_cast<decltype(m.jit_info_table_find)>(
-        pe::getExport(base, "mono_jit_info_table_find"));
-    m.jit_info_get_method = reinterpret_cast<decltype(m.jit_info_get_method)>(
-        pe::getExport(base, "mono_jit_info_get_method"));
-    m.jit_info_get_code_start = reinterpret_cast<decltype(m.jit_info_get_code_start)>(
-        pe::getExport(base, "mono_jit_info_get_code_start"));
-    m.jit_info_get_code_size = reinterpret_cast<decltype(m.jit_info_get_code_size)>(
-        pe::getExport(base, "mono_jit_info_get_code_size"));
     if (missingSymbols != 0) {
         error = {RuntimeResolveFailure::MonoMissingSymbols, missingSymbols};
         return false;
@@ -475,358 +314,6 @@ void detachCurrentThread() {
     gCurrentMonoThreadDetach = nullptr;
     if (thread && detach)
         detach(thread);
-}
-
-bool installManagedMethodCallback(MonoMethod* method, MainThreadCallback callback, void* context) {
-    if (!runtimeResolved() || !method || !callback)
-        return false;
-    void* base = pe::moduleBase("mono-2.0-bdwgc");
-    if (!base)
-        return false;
-    if (!attachCurrentMonoThread(gMono, gMonoDomain)) {
-        KUE_ERR("mono: could not attach callback installer thread");
-        return false;
-    }
-
-    std::lock_guard<std::mutex> installLock(gCallbackInstallMutex);
-    const CallbackBinding* current = gManagedCallbackBinding.load(std::memory_order_acquire);
-    if (current && current->method == method && current->callback == callback &&
-        current->context == context) {
-        return true;
-    }
-    if (current) {
-        KUE_ERR("mono: a different managed-method callback is already active");
-        return false;
-    }
-    const std::uint64_t clearRevision =
-        gManagedCallbackClearRevision.load(std::memory_order_acquire);
-
-    auto create = reinterpret_cast<ProfilerCreateFn>(pe::getExport(base, "mono_profiler_create"));
-    auto setEnter = reinterpret_cast<ProfilerSetEnterFn>(
-        pe::getExport(base, "mono_profiler_set_method_enter_callback"));
-    auto setFilter = reinterpret_cast<ProfilerSetFilterFn>(
-        pe::getExport(base, "mono_profiler_set_call_instrumentation_filter_callback"));
-    if (!create || !setEnter || !setFilter)
-        return false;
-
-    MonoProfilerHandle handle = create(nullptr);
-    if (!handle)
-        return false;
-    const CallbackBinding* binding = createCallbackBinding({.method = method,
-                                                            .callback = callback,
-                                                            .context = context,
-                                                            .compiledTrampoline = nullptr});
-    if (!binding)
-        return false;
-    setEnter(handle, &profilerEnter);
-    setFilter(handle, &profilerFilter);
-    if (!publishManagedCallback(binding, clearRevision)) {
-        KUE_WARN("mono: managed-method callback was cleared during installation");
-        return false;
-    }
-    KUE_INFO("mono: main-thread callback installed for method %p", static_cast<void*>(method));
-    return true;
-}
-
-namespace {
-
-void writeAbsoluteJump(std::uint8_t* destination, const void* address) noexcept {
-    destination[0] = 0xFF;
-    destination[1] = 0x25;
-    std::memset(destination + 2, 0, 4);
-    const auto value = reinterpret_cast<std::uintptr_t>(address);
-    std::memcpy(destination + 6, &value, sizeof(value));
-}
-
-}
-
-PrologueRelocation relocatePrologue(PrologueRelocationRequest request) noexcept {
-    const auto target = reinterpret_cast<std::uintptr_t>(request.code);
-    csh capstone = 0;
-    if (cs_open(CS_ARCH_X86, CS_MODE_64, &capstone) != CS_ERR_OK)
-        return {PrologueRelocationStatus::DisassemblerUnavailable};
-    cs_option(capstone, CS_OPT_DETAIL, CS_OPT_ON);
-    cs_insn* instructions = nullptr;
-    const std::size_t count =
-        cs_disasm(capstone, request.code, std::min(request.codeSize, std::size_t{64}), target, 0,
-                  &instructions);
-
-    std::uint8_t* const trampoline = request.trampoline;
-    PrologueRelocationStatus status = PrologueRelocationStatus::Relocated;
-    std::size_t copied = 0;
-    std::size_t written = 0;
-    bool flowEnds = false;
-    for (std::size_t i = 0; i < count && copied < kCompiledPatchBytes && !flowEnds &&
-                            status == PrologueRelocationStatus::Relocated;
-         ++i) {
-        const cs_insn& ins = instructions[i];
-        if (written + ins.size + 2 * kAbsoluteJumpBytes > request.trampolineCapacity) {
-            status = PrologueRelocationStatus::TrampolineTooSmall;
-            break;
-        }
-        const cs_x86& x86 = ins.detail->x86;
-        const cs_x86_op* memory = nullptr;
-        const cs_x86_op* immediate = nullptr;
-        for (std::uint8_t op = 0; op < x86.op_count; ++op) {
-            if (x86.operands[op].type == X86_OP_MEM)
-                memory = &x86.operands[op];
-            if (x86.operands[op].type == X86_OP_IMM)
-                immediate = &x86.operands[op];
-        }
-        const bool ripRelative = memory && memory->mem.base == X86_REG_RIP;
-        const std::uintptr_t next = static_cast<std::uintptr_t>(ins.address) + ins.size;
-        const std::uintptr_t referenced =
-            ripRelative ? next + static_cast<std::uintptr_t>(x86.disp) : 0;
-
-        if (ins.id == X86_INS_JMP) {
-            flowEnds = true;
-            copied += ins.size;
-            if (immediate) {
-                writeAbsoluteJump(
-                    trampoline + written,
-                    std::bit_cast<void*>(static_cast<std::uintptr_t>(immediate->imm)));
-                written += kAbsoluteJumpBytes;
-            } else if (ripRelative && memory->mem.index == X86_REG_INVALID) {
-                std::uintptr_t destination = 0;
-                std::memcpy(&destination, std::bit_cast<const void*>(referenced),
-                            sizeof(destination));
-                writeAbsoluteJump(trampoline + written, std::bit_cast<void*>(destination));
-                written += kAbsoluteJumpBytes;
-            } else if (!ripRelative) {
-                std::memcpy(trampoline + written, ins.bytes, ins.size);
-                written += ins.size;
-            } else {
-                status = PrologueRelocationStatus::UnsupportedInstruction;
-            }
-            break;
-        }
-
-        std::memcpy(trampoline + written, ins.bytes, ins.size);
-        if (ripRelative) {
-            const std::int64_t replacement =
-                static_cast<std::int64_t>(referenced) -
-                static_cast<std::int64_t>(
-                    reinterpret_cast<std::uintptr_t>(trampoline + written + ins.size));
-            if (referenced >= target && referenced < target + kCompiledPatchBytes) {
-                status = PrologueRelocationStatus::UnsupportedInstruction;
-            } else if (x86.encoding.disp_size != 4 ||
-                       replacement < std::numeric_limits<std::int32_t>::min() ||
-                       replacement > std::numeric_limits<std::int32_t>::max()) {
-                status = PrologueRelocationStatus::UnsupportedInstruction;
-            } else {
-                const auto disp = static_cast<std::int32_t>(replacement);
-                std::memcpy(trampoline + written + x86.encoding.disp_offset, &disp, 4);
-            }
-        }
-        if (immediate && x86.encoding.imm_size &&
-            (cs_insn_group(capstone, &ins, CS_GRP_CALL) ||
-             cs_insn_group(capstone, &ins, CS_GRP_JUMP))) {
-            const std::int64_t replacement =
-                immediate->imm - static_cast<std::int64_t>(reinterpret_cast<std::uintptr_t>(
-                                     trampoline + written + ins.size));
-            if (x86.encoding.imm_size == 4 &&
-                replacement >= std::numeric_limits<std::int32_t>::min() &&
-                replacement <= std::numeric_limits<std::int32_t>::max()) {
-                const auto rel = static_cast<std::int32_t>(replacement);
-                std::memcpy(trampoline + written + x86.encoding.imm_offset, &rel, 4);
-            } else if (x86.encoding.imm_size == 1 && replacement >= -128 && replacement <= 127) {
-                const auto rel = static_cast<std::int8_t>(replacement);
-                std::memcpy(trampoline + written + x86.encoding.imm_offset, &rel, 1);
-            } else {
-                status = PrologueRelocationStatus::UnsupportedInstruction;
-            }
-        }
-        copied += ins.size;
-        written += ins.size;
-    }
-    if (instructions)
-        cs_free(instructions, count);
-    cs_close(&capstone);
-    if (status != PrologueRelocationStatus::Relocated)
-        return {status};
-    if (!flowEnds) {
-        if (copied < kCompiledPatchBytes)
-            return {PrologueRelocationStatus::TooShort};
-        writeAbsoluteJump(trampoline + written, std::bit_cast<void*>(target + copied));
-        written += kAbsoluteJumpBytes;
-    }
-    return {PrologueRelocationStatus::Relocated, copied, written};
-}
-
-bool installCompiledMethodCallback(MonoMethod* method, MainThreadCallback callback, void* context) {
-    if (!runtimeResolved() || !method || !callback)
-        return false;
-    if (!attachCurrentMonoThread(gMono, gMonoDomain)) {
-        KUE_ERR("mono: could not attach compiled callback installer thread");
-        return false;
-    }
-
-    std::lock_guard<std::mutex> installLock(gCallbackInstallMutex);
-    if (gCompiledMethodBinding.load(std::memory_order_acquire))
-        return true;
-    const std::uint64_t clearRevision =
-        gManagedCallbackClearRevision.load(std::memory_order_acquire);
-    if (!gMono.jit_info_table_find || !gMono.jit_info_get_method ||
-        !gMono.jit_info_get_code_start || !gMono.jit_info_get_code_size) {
-        KUE_WARN("mono: late JIT lookup exports unavailable");
-        return false;
-    }
-
-    void* domain =
-        gMonoDomain ? gMonoDomain : (gMono.get_root_domain ? gMono.get_root_domain() : nullptr);
-    if (!domain)
-        return false;
-
-    void* code = nullptr;
-    int codeSize = 0;
-    platform::PageProtection originalCodeProtection = platform::kPageReadExecute;
-    std::size_t executableMaps = 0;
-    std::size_t probes = 0;
-    std::size_t jitHits = 0;
-    platform::MemoryRegionScan regions;
-    platform::MemoryRegion region;
-    while (!code && regions.next(region)) {
-        if (!region.executable || region.kind != platform::MemoryRegionKind::Private)
-            continue;
-        ++executableMaps;
-
-        for (std::uintptr_t address = region.begin; address < region.end; address += 64) {
-            ++probes;
-            void* ji = gMono.jit_info_table_find(domain, std::bit_cast<void*>(address));
-            if (!ji)
-                continue;
-            ++jitHits;
-            void* jiMethod = gMono.jit_info_get_method(ji);
-            void* jiCode = gMono.jit_info_get_code_start(ji);
-            const int jiSize = gMono.jit_info_get_code_size(ji);
-            if (jiMethod == method && jiCode && jiSize > 16) {
-                code = jiCode;
-                codeSize = jiSize;
-                originalCodeProtection = region.protection;
-                break;
-            }
-            if (jiCode && jiSize > 0) {
-                const auto next =
-                    reinterpret_cast<std::uintptr_t>(jiCode) + static_cast<std::uintptr_t>(jiSize);
-                if (next > address)
-                    address = next - 1;
-            }
-        }
-    }
-    if (!code) {
-        KUE_INFO("mono: target method not in JIT table (maps=%zu probes=%zu hits=%zu)",
-                 executableMaps, probes, jitHits);
-        return false;
-    }
-
-    const std::size_t pageSize = platform::pageSize();
-    const auto target = reinterpret_cast<std::uintptr_t>(code);
-    const auto pageMask = ~(static_cast<std::uintptr_t>(pageSize) - 1u);
-    const auto targetPage = target & pageMask;
-    void* executable = nullptr;
-    constexpr std::uintptr_t kStep = 1u << 20;
-    constexpr std::uintptr_t kLimit = 0x70000000u;
-    for (std::uintptr_t distance = kStep; distance < kLimit && !executable; distance += kStep) {
-        for (int direction : {-1, 1}) {
-            std::uintptr_t hint = direction < 0 ? targetPage - distance : targetPage + distance;
-            if (direction < 0 && distance > targetPage)
-                continue;
-            executable = platform::reserveNear(hint, pageSize);
-            if (executable)
-                break;
-        }
-    }
-    if (!executable) {
-        KUE_WARN("mono: could not allocate a near trampoline for late injection");
-        return false;
-    }
-
-    if ((target & 7u) != 0) {
-        platform::releaseReservation(executable, pageSize);
-        KUE_WARN("mono: compiled Update prologue cannot be patched atomically");
-        return false;
-    }
-    auto* trampoline = static_cast<std::uint8_t*>(executable);
-    const PrologueRelocation relocation =
-        relocatePrologue({.code = static_cast<const std::uint8_t*>(code),
-                          .codeSize = static_cast<std::size_t>(codeSize),
-                          .trampoline = trampoline,
-                          .trampolineCapacity = pageSize - kAbsoluteJumpBytes});
-    if (relocation.status != PrologueRelocationStatus::Relocated) {
-        platform::releaseReservation(executable, pageSize);
-        KUE_WARN("mono: compiled Update prologue cannot be relocated (status=%u)",
-                 static_cast<unsigned int>(relocation.status));
-        return false;
-    }
-    auto* relay = trampoline + relocation.trampolineBytes;
-    writeAbsoluteJump(relay, reinterpret_cast<const void*>(&compiledUpdateDetour));
-    const std::uintptr_t relayAddress = reinterpret_cast<std::uintptr_t>(relay);
-    const std::uintptr_t jumpEnd = target + 5;
-    std::int32_t relativeJump = 0;
-    if (relayAddress >= jumpEnd) {
-        const std::uintptr_t distance = relayAddress - jumpEnd;
-        if (distance > static_cast<std::uintptr_t>(std::numeric_limits<std::int32_t>::max())) {
-            platform::releaseReservation(executable, pageSize);
-            return false;
-        }
-        relativeJump = static_cast<std::int32_t>(distance);
-    } else {
-        const std::uintptr_t distance = jumpEnd - relayAddress;
-        constexpr std::uintptr_t kMinimumMagnitude =
-            static_cast<std::uintptr_t>(std::numeric_limits<std::int32_t>::max()) + 1;
-        if (distance > kMinimumMagnitude) {
-            platform::releaseReservation(executable, pageSize);
-            return false;
-        }
-        relativeJump = distance == kMinimumMagnitude ? std::numeric_limits<std::int32_t>::min()
-                                                     : -static_cast<std::int32_t>(distance);
-    }
-    if (!setMemoryProtection({.address = executable,
-                              .length = pageSize,
-                              .protection = platform::kPageReadExecute})) {
-        platform::releaseReservation(executable, pageSize);
-        KUE_WARN("mono: could not make the compiled trampoline executable");
-        return false;
-    }
-
-    const auto protectStart = targetPage;
-    const auto protectEnd = (target + 8 + pageSize - 1u) & pageMask;
-    if (!setMemoryProtection({.address = std::bit_cast<void*>(protectStart),
-                              .length = protectEnd - protectStart,
-                              .protection = platform::kPageReadWriteExecute})) {
-        platform::releaseReservation(executable, pageSize);
-        KUE_WARN("mono: could not make compiled Update writable");
-        return false;
-    }
-
-    const CallbackBinding* binding = createCallbackBinding({.method = method,
-                                                            .callback = callback,
-                                                            .context = context,
-                                                            .compiledTrampoline = trampoline});
-    if (!binding) {
-        platform::releaseReservation(executable, pageSize);
-        return false;
-    }
-    gCompiledMethodBinding.store(binding, std::memory_order_release);
-    if (!gManagedCallbackBinding.load(std::memory_order_acquire))
-        publishManagedCallback(binding, clearRevision);
-    std::uint8_t patch[8] = {0xE9, 0, 0, 0, 0, 0x90, 0x90, 0x90};
-    std::memcpy(patch + 1, &relativeJump, sizeof(relativeJump));
-    std::uint64_t patchWord = 0;
-    std::memcpy(&patchWord, patch, sizeof(patchWord));
-    reinterpret_cast<std::atomic<std::uint64_t>*>(code)->store(patchWord,
-                                                               std::memory_order_seq_cst);
-    platform::flushInstructionCache(code, 8);
-    setMemoryProtection({.address = std::bit_cast<void*>(protectStart),
-                         .length = protectEnd - protectStart,
-                         .protection = originalCodeProtection});
-    KUE_INFO("mono: late main-thread hook installed at %p (method=%p size=%d copied=%zu)", code,
-             static_cast<void*>(method), codeSize, relocation.patchedBytes);
-    return true;
-}
-
-void clearManagedMethodCallback() {
-    deactivateManagedCallback();
 }
 
 MonoMethod* loadManagedMethod(ManagedMethodLocation location) {
@@ -992,18 +479,6 @@ FieldLookupResult findField(const MonoClass* type, const char* name) noexcept {
         gMono.class_get_field_from_name(const_cast<MonoClass*>(type), name));
     return field ? FieldLookupResult{field, MetadataMemberLookupStatus::Resolved}
                  : FieldLookupResult{nullptr, MetadataMemberLookupStatus::MissingMember};
-}
-
-MethodLookupResult findMethod(const MonoClass* type, const char* name,
-                              int parameterCount) noexcept {
-    if (!type || !name || parameterCount < 0)
-        return {nullptr, MetadataMemberLookupStatus::InvalidInput};
-    if (!runtimeResolved())
-        return {nullptr, MetadataMemberLookupStatus::RuntimeUnavailable};
-    MonoMethod* const method = reinterpret_cast<MonoMethod*>(
-        gMono.class_get_method_from_name(const_cast<MonoClass*>(type), name, parameterCount));
-    return method ? MethodLookupResult{method, MetadataMemberLookupStatus::Resolved}
-                  : MethodLookupResult{nullptr, MetadataMemberLookupStatus::MissingMember};
 }
 
 bool readStaticObject(MonoClass* type, const MonoClassField* field, MonoObject*& out) {

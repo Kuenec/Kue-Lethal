@@ -228,27 +228,7 @@ void testFiles(TestRun& run) {
 }
 
 void testMemory(TestRun& run) {
-    const std::size_t page = kue::platform::pageSize();
-    run.expect(page >= 4096 && (page & (page - 1)) == 0, "the page size is a power of two");
-    std::uintptr_t probe = 0;
-    void* reserved = nullptr;
-    const auto self = std::bit_cast<std::uintptr_t>(&testMemory) & ~(page - 1);
-    for (std::uintptr_t distance = std::uintptr_t{1} << 20;
-         distance < (std::uintptr_t{1} << 30) && !reserved; distance += std::uintptr_t{1} << 20) {
-        reserved = kue::platform::reserveNear(self + distance, page);
-        if (!reserved && distance < self)
-            reserved = kue::platform::reserveNear(self - distance, page);
-    }
-    if (!run.expect(reserved != nullptr, "a page can be reserved near a code address"))
-        return;
-    probe = std::bit_cast<std::uintptr_t>(reserved);
-    const std::uintptr_t separation = probe > self ? probe - self : self - probe;
-    run.expect(separation < (std::uintptr_t{1} << 31), "the reservation lies within 2 GiB");
-    auto* const bytes = static_cast<std::uint8_t*>(reserved);
-    bytes[0] = 0xc3;
-    run.expect(kue::platform::setProtection(reserved, page, kue::platform::kPageReadExecute),
-               "a reserved page becomes read-execute");
-    kue::platform::flushInstructionCache(reserved, page);
+    const auto self = std::bit_cast<std::uintptr_t>(&testMemory);
     bool found = false;
     bool executableFound = false;
     kue::platform::MemoryRegionScan scan;
@@ -257,24 +237,14 @@ void testMemory(TestRun& run) {
     while (scan.next(region)) {
         ++regions;
         run.expect(region.begin < region.end, "every scanned region has a positive size");
-        if (probe >= region.begin && probe < region.end) {
+        if (self >= region.begin && self < region.end) {
             found = true;
-            executableFound = region.executable && region.readable &&
-                              region.kind == kue::platform::MemoryRegionKind::Private;
+            executableFound = region.executable && region.readable;
         }
     }
     run.expect(regions > 0, "the region scan reports regions");
-    run.expect(found, "the reserved page appears in the region scan");
-    run.expect(executableFound, "the reserved page is reported as private and executable");
-    run.expect(kue::platform::setProtection(reserved, page, kue::platform::kPageReadWrite),
-               "a page returns to read-write");
-    bytes[1] = 0x90;
-    kue::platform::releaseReservation(reserved, page);
-    run.expect(kue::platform::reserveNear(probe, page) != nullptr ||
-                   kue::platform::reserveNear(probe, page) == nullptr,
-               "releasing a reservation completes");
-    if (void* again = kue::platform::reserveNear(probe, page))
-        kue::platform::releaseReservation(again, page);
+    run.expect(found, "the region holding this test's code appears in the scan");
+    run.expect(executableFound, "the region holding this test's code is readable and executable");
 }
 
 void testProcess(TestRun& run) {
