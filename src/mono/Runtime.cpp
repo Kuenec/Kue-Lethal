@@ -528,6 +528,131 @@ bool installManagedMethodCallback(MonoMethod* method, MainThreadCallback callbac
     return true;
 }
 
+namespace {
+
+void writeAbsoluteJump(std::uint8_t* destination, const void* address) noexcept {
+    destination[0] = 0xFF;
+    destination[1] = 0x25;
+    std::memset(destination + 2, 0, 4);
+    const auto value = reinterpret_cast<std::uintptr_t>(address);
+    std::memcpy(destination + 6, &value, sizeof(value));
+}
+
+}
+
+PrologueRelocation relocatePrologue(PrologueRelocationRequest request) noexcept {
+    const auto target = reinterpret_cast<std::uintptr_t>(request.code);
+    csh capstone = 0;
+    if (cs_open(CS_ARCH_X86, CS_MODE_64, &capstone) != CS_ERR_OK)
+        return {PrologueRelocationStatus::DisassemblerUnavailable};
+    cs_option(capstone, CS_OPT_DETAIL, CS_OPT_ON);
+    cs_insn* instructions = nullptr;
+    const std::size_t count =
+        cs_disasm(capstone, request.code, std::min(request.codeSize, std::size_t{64}), target, 0,
+                  &instructions);
+
+    std::uint8_t* const trampoline = request.trampoline;
+    PrologueRelocationStatus status = PrologueRelocationStatus::Relocated;
+    std::size_t copied = 0;
+    std::size_t written = 0;
+    bool flowEnds = false;
+    for (std::size_t i = 0; i < count && copied < kCompiledPatchBytes && !flowEnds &&
+                            status == PrologueRelocationStatus::Relocated;
+         ++i) {
+        const cs_insn& ins = instructions[i];
+        if (written + ins.size + 2 * kAbsoluteJumpBytes > request.trampolineCapacity) {
+            status = PrologueRelocationStatus::TrampolineTooSmall;
+            break;
+        }
+        const cs_x86& x86 = ins.detail->x86;
+        const cs_x86_op* memory = nullptr;
+        const cs_x86_op* immediate = nullptr;
+        for (std::uint8_t op = 0; op < x86.op_count; ++op) {
+            if (x86.operands[op].type == X86_OP_MEM)
+                memory = &x86.operands[op];
+            if (x86.operands[op].type == X86_OP_IMM)
+                immediate = &x86.operands[op];
+        }
+        const bool ripRelative = memory && memory->mem.base == X86_REG_RIP;
+        const std::uintptr_t next = static_cast<std::uintptr_t>(ins.address) + ins.size;
+        const std::uintptr_t referenced =
+            ripRelative ? next + static_cast<std::uintptr_t>(x86.disp) : 0;
+
+        if (ins.id == X86_INS_JMP) {
+            flowEnds = true;
+            copied += ins.size;
+            if (immediate) {
+                writeAbsoluteJump(
+                    trampoline + written,
+                    std::bit_cast<void*>(static_cast<std::uintptr_t>(immediate->imm)));
+                written += kAbsoluteJumpBytes;
+            } else if (ripRelative && memory->mem.index == X86_REG_INVALID) {
+                std::uintptr_t destination = 0;
+                std::memcpy(&destination, std::bit_cast<const void*>(referenced),
+                            sizeof(destination));
+                writeAbsoluteJump(trampoline + written, std::bit_cast<void*>(destination));
+                written += kAbsoluteJumpBytes;
+            } else if (!ripRelative) {
+                std::memcpy(trampoline + written, ins.bytes, ins.size);
+                written += ins.size;
+            } else {
+                status = PrologueRelocationStatus::UnsupportedInstruction;
+            }
+            break;
+        }
+
+        std::memcpy(trampoline + written, ins.bytes, ins.size);
+        if (ripRelative) {
+            const std::int64_t replacement =
+                static_cast<std::int64_t>(referenced) -
+                static_cast<std::int64_t>(
+                    reinterpret_cast<std::uintptr_t>(trampoline + written + ins.size));
+            if (referenced >= target && referenced < target + kCompiledPatchBytes) {
+                status = PrologueRelocationStatus::UnsupportedInstruction;
+            } else if (x86.encoding.disp_size != 4 ||
+                       replacement < std::numeric_limits<std::int32_t>::min() ||
+                       replacement > std::numeric_limits<std::int32_t>::max()) {
+                status = PrologueRelocationStatus::UnsupportedInstruction;
+            } else {
+                const auto disp = static_cast<std::int32_t>(replacement);
+                std::memcpy(trampoline + written + x86.encoding.disp_offset, &disp, 4);
+            }
+        }
+        if (immediate && x86.encoding.imm_size &&
+            (cs_insn_group(capstone, &ins, CS_GRP_CALL) ||
+             cs_insn_group(capstone, &ins, CS_GRP_JUMP))) {
+            const std::int64_t replacement =
+                immediate->imm - static_cast<std::int64_t>(reinterpret_cast<std::uintptr_t>(
+                                     trampoline + written + ins.size));
+            if (x86.encoding.imm_size == 4 &&
+                replacement >= std::numeric_limits<std::int32_t>::min() &&
+                replacement <= std::numeric_limits<std::int32_t>::max()) {
+                const auto rel = static_cast<std::int32_t>(replacement);
+                std::memcpy(trampoline + written + x86.encoding.imm_offset, &rel, 4);
+            } else if (x86.encoding.imm_size == 1 && replacement >= -128 && replacement <= 127) {
+                const auto rel = static_cast<std::int8_t>(replacement);
+                std::memcpy(trampoline + written + x86.encoding.imm_offset, &rel, 1);
+            } else {
+                status = PrologueRelocationStatus::UnsupportedInstruction;
+            }
+        }
+        copied += ins.size;
+        written += ins.size;
+    }
+    if (instructions)
+        cs_free(instructions, count);
+    cs_close(&capstone);
+    if (status != PrologueRelocationStatus::Relocated)
+        return {status};
+    if (!flowEnds) {
+        if (copied < kCompiledPatchBytes)
+            return {PrologueRelocationStatus::TooShort};
+        writeAbsoluteJump(trampoline + written, std::bit_cast<void*>(target + copied));
+        written += kAbsoluteJumpBytes;
+    }
+    return {PrologueRelocationStatus::Relocated, copied, written};
+}
+
 bool installCompiledMethodCallback(MonoMethod* method, MainThreadCallback callback, void* context) {
     if (!runtimeResolved() || !method || !callback)
         return false;
@@ -616,99 +741,24 @@ bool installCompiledMethodCallback(MonoMethod* method, MainThreadCallback callba
         return false;
     }
 
-    csh capstone = 0;
-    cs_insn* instructions = nullptr;
-    if (cs_open(CS_ARCH_X86, CS_MODE_64, &capstone) != CS_ERR_OK) {
-        platform::releaseReservation(executable, pageSize);
-        return false;
-    }
-    cs_option(capstone, CS_OPT_DETAIL, CS_OPT_ON);
-    const std::size_t disassemblySize =
-        std::min(static_cast<std::size_t>(codeSize), std::size_t{64});
-    const std::size_t count = cs_disasm(capstone, reinterpret_cast<const std::uint8_t*>(code),
-                                        disassemblySize, target, 0, &instructions);
-    std::size_t copied = 0;
-    for (std::size_t i = 0; i < count && copied < 8; ++i)
-        copied += instructions[i].size;
-    if (!instructions || copied < 8 || copied + 160 >= pageSize || (target & 7u) != 0) {
-        if (instructions)
-            cs_free(instructions, count);
-        cs_close(&capstone);
+    if ((target & 7u) != 0) {
         platform::releaseReservation(executable, pageSize);
         KUE_WARN("mono: compiled Update prologue cannot be patched atomically");
         return false;
     }
-
     auto* trampoline = static_cast<std::uint8_t*>(executable);
-    std::size_t written = 0;
-    bool relocatable = true;
-    for (std::size_t i = 0; i < count && written < copied; ++i) {
-        const cs_insn& ins = instructions[i];
-        std::memcpy(trampoline + written, ins.bytes, ins.size);
-        const cs_x86& x86 = ins.detail->x86;
-        if (x86.encoding.disp_size) {
-            bool ripRelative = false;
-            for (std::uint8_t op = 0; op < x86.op_count; ++op)
-                if (x86.operands[op].type == X86_OP_MEM && x86.operands[op].mem.base == X86_REG_RIP)
-                    ripRelative = true;
-            if (ripRelative && x86.encoding.disp_size == 4) {
-                const std::int64_t absolute =
-                    static_cast<std::int64_t>(ins.address + ins.size) + x86.disp;
-                const std::int64_t replacement =
-                    absolute - static_cast<std::int64_t>(reinterpret_cast<std::uintptr_t>(
-                                   trampoline + written + ins.size));
-                if (replacement < std::numeric_limits<std::int32_t>::min() ||
-                    replacement > std::numeric_limits<std::int32_t>::max())
-                    relocatable = false;
-                else {
-                    const auto disp = static_cast<std::int32_t>(replacement);
-                    std::memcpy(trampoline + written + x86.encoding.disp_offset, &disp, 4);
-                }
-            }
-        }
-        if (x86.encoding.imm_size && (cs_insn_group(capstone, &ins, CS_GRP_CALL) ||
-                                      cs_insn_group(capstone, &ins, CS_GRP_JUMP))) {
-            const cs_x86_op* immediate = nullptr;
-            for (std::uint8_t op = 0; op < x86.op_count; ++op)
-                if (x86.operands[op].type == X86_OP_IMM)
-                    immediate = &x86.operands[op];
-            if (immediate) {
-                const std::int64_t replacement =
-                    immediate->imm - static_cast<std::int64_t>(reinterpret_cast<std::uintptr_t>(
-                                         trampoline + written + ins.size));
-                if (x86.encoding.imm_size == 4 &&
-                    replacement >= std::numeric_limits<std::int32_t>::min() &&
-                    replacement <= std::numeric_limits<std::int32_t>::max()) {
-                    const auto rel = static_cast<std::int32_t>(replacement);
-                    std::memcpy(trampoline + written + x86.encoding.imm_offset, &rel, 4);
-                } else if (x86.encoding.imm_size == 1 && replacement >= -128 &&
-                           replacement <= 127) {
-                    const auto rel = static_cast<std::int8_t>(replacement);
-                    std::memcpy(trampoline + written + x86.encoding.imm_offset, &rel, 1);
-                } else {
-                    relocatable = false;
-                }
-            }
-        }
-        written += ins.size;
-    }
-    cs_free(instructions, count);
-    cs_close(&capstone);
-    if (!relocatable) {
+    const PrologueRelocation relocation =
+        relocatePrologue({.code = static_cast<const std::uint8_t*>(code),
+                          .codeSize = static_cast<std::size_t>(codeSize),
+                          .trampoline = trampoline,
+                          .trampolineCapacity = pageSize - kAbsoluteJumpBytes});
+    if (relocation.status != PrologueRelocationStatus::Relocated) {
         platform::releaseReservation(executable, pageSize);
-        KUE_WARN("mono: compiled Update prologue contains an unsupported relative instruction");
+        KUE_WARN("mono: compiled Update prologue cannot be relocated (status=%u)",
+                 static_cast<unsigned int>(relocation.status));
         return false;
     }
-
-    auto writeAbsoluteJump = [](std::uint8_t* destination, const void* address) {
-        destination[0] = 0xFF;
-        destination[1] = 0x25;
-        std::memset(destination + 2, 0, 4);
-        const auto value = reinterpret_cast<std::uintptr_t>(address);
-        std::memcpy(destination + 6, &value, sizeof(value));
-    };
-    writeAbsoluteJump(trampoline + copied, std::bit_cast<void*>(target + copied));
-    auto* relay = trampoline + copied + 32;
+    auto* relay = trampoline + relocation.trampolineBytes;
     writeAbsoluteJump(relay, reinterpret_cast<const void*>(&compiledUpdateDetour));
     const std::uintptr_t relayAddress = reinterpret_cast<std::uintptr_t>(relay);
     const std::uintptr_t jumpEnd = target + 5;
@@ -771,7 +821,7 @@ bool installCompiledMethodCallback(MonoMethod* method, MainThreadCallback callba
                          .length = protectEnd - protectStart,
                          .protection = originalCodeProtection});
     KUE_INFO("mono: late main-thread hook installed at %p (method=%p size=%d copied=%zu)", code,
-             static_cast<void*>(method), codeSize, copied);
+             static_cast<void*>(method), codeSize, relocation.patchedBytes);
     return true;
 }
 

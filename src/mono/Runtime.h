@@ -133,6 +133,32 @@ struct StaticInvocationResult final {
 [[nodiscard]] bool ready() noexcept;
 void detachCurrentThread();
 
+inline constexpr std::size_t kCompiledPatchBytes = 8;
+inline constexpr std::size_t kAbsoluteJumpBytes = 14;
+
+struct PrologueRelocationRequest final {
+    const std::uint8_t* code;
+    std::size_t codeSize;
+    std::uint8_t* trampoline;
+    std::size_t trampolineCapacity;
+};
+
+enum class PrologueRelocationStatus : std::uint8_t {
+    Relocated,
+    DisassemblerUnavailable,
+    TooShort,
+    UnsupportedInstruction,
+    TrampolineTooSmall
+};
+
+struct PrologueRelocation final {
+    PrologueRelocationStatus status = PrologueRelocationStatus::DisassemblerUnavailable;
+    std::size_t patchedBytes = 0;
+    std::size_t trampolineBytes = 0;
+};
+
+[[nodiscard]] PrologueRelocation relocatePrologue(PrologueRelocationRequest request) noexcept;
+
 using MainThreadCallback = void (*)(void* context);
 [[nodiscard]] bool installManagedMethodCallback(MonoMethod* method, MainThreadCallback callback,
                                                 void* context);
